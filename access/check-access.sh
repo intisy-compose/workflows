@@ -11,6 +11,7 @@ spec="$here/PORTS.md"
 exempt="game shelf"
 
 failures=0
+checked=0
 fail() { echo "FAIL $1: $2"; failures=$((failures + 1)); }
 
 is_exempt() { [[ " $exempt " == *" $1 "* ]]; }
@@ -34,6 +35,7 @@ for repo in "$root"/*-compose; do
     is_exempt "$stack" && continue
     compose_files=("$repo"/docker-compose*.yml)
     [ -e "${compose_files[0]}" ] || continue
+    checked=$((checked + 1))
 
     while read -r mapping; do
         [ -n "$mapping" ] || continue
@@ -54,5 +56,6 @@ for repo in "$root"/*-compose; do
     done
 done
 
-[ "$failures" -eq 0 ] && echo "every stack serves its dashboards on the tailnet and on localhost only"
+[ "$checked" -gt 0 ] || fail "$root" "holds no *-compose repo with a compose file, so nothing was checked"
+[ "$failures" -eq 0 ] && echo "all $checked stacks serve their dashboards on the tailnet and on localhost only"
 exit $((failures > 0))
