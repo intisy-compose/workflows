@@ -1,0 +1,2 @@
+kind: generic
+description: "Shared GitHub Actions workflows for the intisy-compose stacks: reusable workflows that every stack repository calls instead of carrying its own logic."
