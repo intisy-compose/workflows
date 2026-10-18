@@ -1,0 +1,33 @@
+name: Check dashboard access
+
+# A stack's dashboards are on the tailnet and on loopback only, with every local port in access/PORTS.md.
+on:
+  workflow_call:
+    inputs:
+      workflows_ref:
+        description: Ref of intisy-compose/workflows whose check and port table to use; empty means its default branch.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the stack
+        uses: actions/checkout@v4
+        with:
+          path: stacks/${{ github.event.repository.name }}
+          submodules: false
+
+      - name: Check out the check
+        uses: actions/checkout@v4
+        with:
+          repository: intisy-compose/workflows
+          ref: ${{ inputs.workflows_ref }}
+          path: workflows
+
+      - name: Run the check
+        run: bash workflows/access/check-access.sh stacks
