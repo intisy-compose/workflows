@@ -17,11 +17,8 @@ function Initialize-Volume([string]$Volume, [string]$Command) {
 
 function Wait-PostgresReady([string]$Container) {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        docker exec $Container pg_isready -U postgres 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Start-Sleep -Seconds 1
-            return
-        }
+        docker exec $Container pg_isready -h 127.0.0.1 -U postgres 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { return }
         Start-Sleep -Seconds 1
     }
     throw "postgres in $Container did not become ready"
@@ -64,6 +61,13 @@ Describe "Test-DatabaseVolumeIsEmpty" {
     It "is true for an empty volume" { Test-DatabaseVolumeIsEmpty $emptyVolume | Should Be $true }
     It "is false for a volume with PG_VERSION at its root" { Test-DatabaseVolumeIsEmpty $postgresVolume | Should Be $false }
     It "is false for a pg0 layout, PG_VERSION under instances/x/data" { Test-DatabaseVolumeIsEmpty $pg0Volume | Should Be $false }
+}
+
+Describe "Test-IsMissingVolumeAnswer" {
+    It "is true for a non-zero exit saying no such volume" { Test-IsMissingVolumeAnswer 1 "Error response from daemon: get x: no such volume" | Should Be $true }
+    It "is false for a non-zero exit from a daemon outage" { Test-IsMissingVolumeAnswer 1 "error during connect: daemon is not running" | Should Be $false }
+    It "is false for a null exit code (docker missing)" { Test-IsMissingVolumeAnswer $null "" | Should Be $false }
+    It "is false for a zero exit code" { Test-IsMissingVolumeAnswer 0 "[]" | Should Be $false }
 }
 
 Describe "Get-NewestDump" {

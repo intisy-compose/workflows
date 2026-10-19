@@ -4,6 +4,17 @@
 
 <#
 .SYNOPSIS
+True only when `docker volume inspect` failed because the volume does not exist.
+.NOTES
+A daemon outage, a permission error, a timeout or a missing docker binary (null exit code) are not
+"missing", so they never lead to a restore over data.
+#>
+function Test-IsMissingVolumeAnswer([object]$ExitCode, [string]$Output) {
+    return ($ExitCode -is [int]) -and ($ExitCode -ne 0) -and ($Output -match "no such volume")
+}
+
+<#
+.SYNOPSIS
 True when the named Docker volume does not exist or holds no Postgres cluster.
 .NOTES
 PG_VERSION marks a cluster. It is searched to depth 4 because pg0 keeps its cluster at
@@ -14,8 +25,10 @@ function Test-DatabaseVolumeIsEmpty([string]$Volume) {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        docker volume inspect $Volume 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { return $true }
+        $inspectOutput = docker volume inspect $Volume 2>&1 | Out-String
+        $inspectExitCode = $LASTEXITCODE
+        if (Test-IsMissingVolumeAnswer $inspectExitCode $inspectOutput) { return $true }
+        if ($inspectExitCode -ne 0) { return $false }
         $found = docker run --rm -v "${Volume}:/v:ro" alpine:3.21 find /v -maxdepth 4 -name PG_VERSION 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
         return -not $found
