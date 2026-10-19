@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=${1:-$(cd "$here/../.." && pwd)}
 spec="$here/PORTS.md"
 
-# Game ports are game protocols for players, not dashboards; shelf is stopped and must not change.
+# Game ports are game protocols for players, not dashboards; shelf is stopped.
 exempt="game shelf"
 
 failures=0

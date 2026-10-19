@@ -31,3 +31,6 @@ jobs:
 
       - name: Run the check
         run: bash workflows/access/check-access.sh stacks
+
+      - name: Check the project and container names
+        run: bash workflows/naming/check-naming.sh stacks
