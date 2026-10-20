@@ -95,6 +95,11 @@ Describe "Get-DumpToRestore" {
     It "is null for a volume holding PG_VERSION even with dumps present" { Get-DumpToRestore $postgresVolume $dumps "app-*.dump" | Should Be $null }
     It "is null for an empty volume and an empty folder" { Get-DumpToRestore $emptyVolume $emptyFolder "app-*.dump" | Should Be $null }
     It "is the newest complete dump for an empty volume" { (Get-DumpToRestore $emptyVolume $dumps "app-*.dump").Name | Should Be "app-20261019-200000.dump" }
+    It "skips a newest dump the validator rejects and returns the older one" {
+        (Get-DumpToRestore $emptyVolume $dumps "app-*.dump" { param($dump) $dump.Name -ne "app-20261019-200000.dump" }).Name | Should Be "app-20261019-190000.dump"
+    }
+    It "is null when no dump passes the validator" { Get-DumpToRestore $emptyVolume $dumps "app-*.dump" { param($dump) $false } | Should Be $null }
+    It "still returns null for a non-empty volume with a validator" { Get-DumpToRestore $postgresVolume $dumps "app-*.dump" { param($dump) $true } | Should Be $null }
 }
 
 Describe "fixture cleanup" {
