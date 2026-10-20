@@ -7,7 +7,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=${1:-$(cd "$here/../.." && pwd)}
 table=${PORTS_TABLE:-$here/PORTS.md}
 template="$here/../gateway"
-vendored_files="Caddyfile gateway.yml"
+vendored_files="Caddyfile gateway.yml tailscale.sh"
+funnel_capable_ports=" 443 8443 10000 "
 
 failures=0
 checked=0
@@ -194,13 +195,17 @@ check_gateway() {
     check_vendored_gateway "$stack" "$repo"
     [ -e "$repo/gateway/sites.caddy" ] && [ -e "$repo/gateway/serve.json" ] || return 0
 
+    if grep -qE 'TS_SERVE_CONFIG|/config/serve\.json|/config/tailscale\.sh' "${compose_files[@]}"; then
+        fail "$stack" "overrides the template's serve config; PUBLIC_ACCESS is the only Funnel switch"
+    fi
     serve_found=""
     for file in "$repo"/gateway/*.json; do
-        if grep -q '"AllowFunnel"' "$file" && [[ " $funnel_stacks " != *" $stack "* ]]; then
-            fail "$stack" "gateway/$(basename "$file") opens Funnel but the stack is not a funnel stack"
-        fi
+        grep -q '"AllowFunnel"' "$file" &&
+            fail "$stack" "gateway/$(basename "$file") opens Funnel itself; PUBLIC_ACCESS in config.env is the only Funnel switch"
         collect_serve_ports "$stack" "$file"
     done
+    [ "$(grep -v '^[[:space:]]*$' "$repo/gateway/serve.json" | tail -n 2 | tr -d '[:space:]')" = "}}" ] ||
+        fail "$stack" "gateway/serve.json does not end with the TCP block's '  }' and the closing '}' the template's tailscale.sh extends"
 
     while read -r address imports_tailnet tls; do
         [ "$tls" = 0 ] || fail "$stack" "sites.caddy sets tls itself; certificates come only from 'import tailnet'"
@@ -220,7 +225,10 @@ check_gateway() {
         kind=$(kind_of "$stack" tailnet "$port")
         case $kind in
             web) [[ " $tailnet_sites " == *" $port "* ]] || fail "$stack" "web port $port is forwarded on the tailnet but has no {\$TAILNET_HOST}:$port site" ;;
-            protocol) ;;
+            protocol)
+                [[ $funnel_capable_ports != *" $port "* ]] ||
+                    fail "$stack" "protocol port $port is one Funnel carries; PUBLIC_ACCESS would open it to the internet"
+                ;;
             *) fail "$stack" "forwards tailnet port $port, which is not a web or protocol port in PORTS.md" ;;
         esac
     done
@@ -238,7 +246,6 @@ check_gateway() {
 
 rows=$(table_rows)
 public_stacks=$(listed_stacks "Public stacks")
-funnel_stacks=$(listed_stacks "Funnel stacks")
 
 for repo in "$root"/*-compose; do
     stack=$(basename "$repo" -compose)

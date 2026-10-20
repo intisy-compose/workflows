@@ -34,8 +34,6 @@ write_table() {
 | arcade | game | public | - | 25565 |
 
 Public stacks: `arcade`.
-
-Funnel stacks: `none`.
 EOF
 }
 
@@ -45,7 +43,7 @@ new_stacks() {
     write_table
     local demo="$scratch/stacks/demo-compose" arcade="$scratch/stacks/arcade-compose"
     mkdir -p "$demo/gateway" "$arcade"
-    cp "$template/Caddyfile" "$template/gateway.yml" "$demo/gateway/"
+    cp "$template/Caddyfile" "$template/gateway.yml" "$template/tailscale.sh" "$demo/gateway/"
     cat >"$demo/docker-compose.yml" <<'EOF'
 services:
   api:
@@ -155,9 +153,24 @@ expect "web port without its local site fails" 1 "web port 8401 has no http://:8
 
 new_stacks
 printf '{\n  "TCP": { "443": { "TCPForward": "127.0.0.1:443" } },\n  "AllowFunnel": { "${TS_CERT_DOMAIN}:443": true }\n}\n' >"$demo/gateway/funnel.json"
-expect "funnel outside a funnel stack fails" 1 "gateway/funnel.json opens Funnel but the stack is not a funnel stack"
-sed -i 's/^Funnel stacks:.*/Funnel stacks: `demo`./' "$PORTS_TABLE"
-expect "funnel in a funnel stack passes" 0 ""
+expect "funnel in a stack's own serve config fails" 1 "gateway/funnel.json opens Funnel itself"
+
+new_stacks
+printf '    volumes:\n      - ./gateway/funnel.json:/config/serve.json:ro\n' >>"$demo/docker-compose.yml"
+expect "overriding the template's serve config fails" 1 "overrides the template's serve config"
+
+new_stacks
+sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"8443": { "TCPForward": "127.0.0.1:8443" }/' "$demo/gateway/serve.json"
+sed -i 's/^| demo | sync | protocol | 22000 | - |$/| demo | sync | protocol | 8443 | - |/' "$PORTS_TABLE"
+expect "protocol on a port Funnel carries fails" 1 "protocol port 8443 is one Funnel carries"
+
+new_stacks
+printf '{ "TCP": { "443": { "TCPForward": "127.0.0.1:443" }, "22000": { "TCPForward": "127.0.0.1:22000" } } }\n' >"$demo/gateway/serve.json"
+expect "serve.json the toggle cannot extend fails" 1 "gateway/serve.json does not end with"
+
+new_stacks
+echo "# drifted" >>"$demo/gateway/tailscale.sh"
+expect "drifted vendored tailscale.sh fails" 1 "gateway/tailscale.sh differs"
 
 new_stacks
 publish_extra "8080"

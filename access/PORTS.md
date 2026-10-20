@@ -14,6 +14,11 @@ tailnet and on loopback) and `specs/2026-10-20-connect-devices-design.md` (this 
 | `protocol` | the tailnet only, through the gateway's `serve.json`; never on the host's other interfaces |
 | `public` | anywhere; only in a stack listed under public stacks below |
 
+Public access is one switch for every stack on the shared gateway: `PUBLIC_ACCESS=true` in its
+`config.env` (default `false`) opens its tailnet sites on the ports Funnel carries (443, 8443,
+10000) to the internet through Tailscale Funnel. Those ports are therefore only ever `web`, and
+Funnel is switched on nowhere else.
+
 `tailnet` is the port on the stack's `ts.net` name, `host` the port published on this host; `-`
 means none. A range reserves ports a stack takes as it grows; the check accepts any port in it.
 
@@ -33,7 +38,7 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 | hindsight | in-stack llama | api | - | 11434 |
 | graphify | graph explorer | web | 443 | 8771 |
 | graphify | MCP endpoint | api | - | 8770 |
-| stremio | streaming server | web | 443 | 11470 |
+| stremio | streaming server (8446: a native Stremio app on this PC holds 11470) | web | 443 | 8446 |
 | shelf | shelf.nu | web | 443 | 8444 |
 | shelf | Supabase Auth and Storage for shelf.nu | web | 8443 | 8445 |
 | shelf | Mailpit, which holds login codes | web | - | 8025 |
@@ -48,7 +53,3 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 
 Public stacks: `game`. Game servers are meant for players on the internet, and their ports go
 through the playit or frp tunnel.
-
-Funnel stacks: `stremio`. `PUBLIC_ACCESS=true` in its `config.env` serves the tailnet site through
-Tailscale Funnel (`gateway/funnel.json`) to share it with friends outside the tailnet; it is off by
-default.
