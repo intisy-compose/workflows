@@ -28,7 +28,7 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 |---|---|---|---|---|
 | inventree | InvenTree | web | 443 | 8441 |
 | storage | dashboard | web | 443 | 8442 |
-| storage | Syncthing GUI | web | 8384 | 8443 |
+| storage | Syncthing GUI, this host only (the tailnet reaches only its sync protocol) | web | - | 8443 |
 | storage | Samba | protocol | 445 | - |
 | storage | Syncthing sync | protocol | 22000 | - |
 | storage | Syncthing sync of each further node on a host, reserved | protocol | 22001-22099 | - |
