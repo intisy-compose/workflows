@@ -33,6 +33,7 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 | storage | Syncthing sync | protocol | 22000 | - |
 | storage | Syncthing sync of each further node on a host, reserved | protocol | 22001-22099 | - |
 | storage | Kopia server | protocol | 51515 | - |
+| storage | Syncthing GUIs and APIs of the Windows host agent's native nodes (host processes, not compose ports; their sync ports are in 22001-22099) | api | - | 8450-8469 |
 | hindsight | control plane | web | 443 | 9999 |
 | hindsight | API for local tools | api | - | 8888 |
 | hindsight | in-stack llama | api | - | 11434 |
