@@ -22,7 +22,16 @@ byte for byte, extends both services from its compose file, and adds only its ow
 `gateway/sites.caddy` (its sites, each tailnet site with `import tailnet`), `gateway/serve.json`
 (the tailnet ports, each a `TCPForward` to the same port on `127.0.0.1`), container names,
 `TAILNET_HOST`, `TS_HOSTNAME` and the gateway's loopback ports. A change to the template is copied
-into every stack in the same step; the check fails on any copy that differs.
+into every stack in the same step (`Caddyfile`, `gateway.yml` and `tailscale.sh`); the check fails
+on any copy that differs.
+
+**Public access** is one switch, the same in every stack: `PUBLIC_ACCESS=true` in the stack's
+`config.env` (default `false`, and anything but `true`, `1`, `yes` or `on` counts as off) makes
+`tailscale.sh` add Tailscale Funnel to the serve config for every forwarded port Funnel carries
+(443, 8443, 10000), so those sites answer from the internet, without a login of their own, until the
+switch is off again and the stack restarted. It needs the `funnel` node attribute in the tailnet
+policy. A stack never opens Funnel any other way, and the ports Funnel carries are only ever `web`
+ports in `access/PORTS.md`.
 
 ## Using it
 
