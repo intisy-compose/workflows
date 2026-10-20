@@ -91,15 +91,12 @@ Describe "Get-TableRowCounts" {
     }
 }
 
-Describe "Get-DumpToRestore" {
-    It "is null for a volume holding PG_VERSION even with dumps present" { Get-DumpToRestore $postgresVolume $dumps "app-*.dump" | Should Be $null }
-    It "is null for an empty volume and an empty folder" { Get-DumpToRestore $emptyVolume $emptyFolder "app-*.dump" | Should Be $null }
-    It "is the newest complete dump for an empty volume" { (Get-DumpToRestore $emptyVolume $dumps "app-*.dump").Name | Should Be "app-20261019-200000.dump" }
-    It "skips a newest dump the validator rejects and returns the older one" {
-        (Get-DumpToRestore $emptyVolume $dumps "app-*.dump" { param($dump) $dump.Name -ne "app-20261019-200000.dump" }).Name | Should Be "app-20261019-190000.dump"
-    }
-    It "is null when no dump passes the validator" { Get-DumpToRestore $emptyVolume $dumps "app-*.dump" { param($dump) $false } | Should Be $null }
-    It "still returns null for a non-empty volume with a validator" { Get-DumpToRestore $postgresVolume $dumps "app-*.dump" { param($dump) $true } | Should Be $null }
+Describe "Get-RestoreDecision against real volumes" {
+    It "keeps a volume holding PG_VERSION even with dumps present" { (Get-RestoreDecision $postgresVolume $dumps "app-*.dump").Action | Should Be "Keep" }
+    It "keeps a pg0 volume even with -Fresh" { (Get-RestoreDecision $pg0Volume $dumps "app-*.dump" -AllowFresh $true).Action | Should Be "Keep" }
+    It "starts fresh on an empty volume with an empty folder" { (Get-RestoreDecision $emptyVolume $emptyFolder "app-*.dump").Action | Should Be "Fresh" }
+    It "restores the newest complete dump into an empty volume" { (Get-RestoreDecision $emptyVolume $dumps "app-*.dump").Dump.Name | Should Be "app-20261019-200000.dump" }
+    It "refuses an empty volume when every dump is rejected" { (Get-RestoreDecision $emptyVolume $dumps "app-*.dump" { param($dump) "no table data" }).Action | Should Be "Refuse" }
 }
 
 Describe "fixture cleanup" {
