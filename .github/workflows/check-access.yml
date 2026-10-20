@@ -1,6 +1,6 @@
 name: Check dashboard access
 
-# A stack's dashboards are on the tailnet and on loopback only, with every local port in access/PORTS.md.
+# Every port of a stack is in access/PORTS.md and listens only where its kind allows, through the shared gateway.
 on:
   workflow_call:
     inputs:
