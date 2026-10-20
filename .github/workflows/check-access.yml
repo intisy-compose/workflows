@@ -34,3 +34,6 @@ jobs:
 
       - name: Check the project and container names
         run: bash workflows/naming/check-naming.sh stacks
+
+      - name: Check every volume has a role
+        run: bash workflows/data-on-disk/check-volumes.sh stacks
