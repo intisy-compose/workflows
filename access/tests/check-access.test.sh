@@ -128,11 +128,35 @@ expect "tailscale serve terminating TLS fails" 1 "gateway/serve.json terminates 
 
 new_stacks
 sed -i 's/"443": { "TCPForward": "127.0.0.1:443" }/"443": { "TCPForward": "127.0.0.1:8080" }/' "$demo/gateway/serve.json"
-expect "forward to another port fails" 1 "gateway/serve.json port 443 is not a TCPForward to 127.0.0.1:443"
+expect "forward to another port fails" 1 "gateway/serve.json port 443 is neither a TCPForward to 127.0.0.1:443"
 
 new_stacks
 sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"22000": { "TCPForward": "127.0.0.1:22000" },\n    "8384": { "TCPForward": "127.0.0.1:8384" }/' "$demo/gateway/serve.json"
 expect "tailnet port missing from the table fails" 1 "forwards tailnet port 8384, which is not a web or protocol port in PORTS.md"
+
+add_direct_forward() {
+    sed -i "s/\"22000\": { \"TCPForward\": \"127.0.0.1:22000\" }/&,\n    \"8447\": { \"TCPForward\": \"api:8447\"$1 }/" "$demo/gateway/serve.json"
+}
+
+new_stacks
+add_direct_forward ', "TerminateTLS": "${TS_CERT_DOMAIN}", "ProxyProtocol": 2'
+printf '| demo | join API | protocol | 8447 | - |\n' >>"$PORTS_TABLE"
+expect "direct forward with TLS and PROXY protocol on a protocol port passes" 0 "all 2 stacks"
+
+new_stacks
+add_direct_forward ', "TerminateTLS": "${TS_CERT_DOMAIN}"'
+printf '| demo | join API | protocol | 8447 | - |\n' >>"$PORTS_TABLE"
+expect "direct forward without PROXY protocol fails" 1 "port 8447 is neither a TCPForward to 127.0.0.1:8447 nor a direct forward"
+
+new_stacks
+add_direct_forward ''
+printf '| demo | join API | protocol | 8447 | - |\n' >>"$PORTS_TABLE"
+expect "plain forward to a service fails" 1 "port 8447 is neither a TCPForward"
+
+new_stacks
+add_direct_forward ', "TerminateTLS": "${TS_CERT_DOMAIN}", "ProxyProtocol": 2'
+printf '| demo | join UI | web | 8447 | 8447 |\n' >>"$PORTS_TABLE"
+expect "direct forward on a web port fails" 1 "tailnet port 8447 skips the gateway, which only a protocol port may"
 
 new_stacks
 sed -i '/"22000"/d; s/"127.0.0.1:443" },/"127.0.0.1:443" }/' "$demo/gateway/serve.json"

@@ -74,8 +74,11 @@ caddy_sites() {
 }
 
 # Adds the tailnet ports a tailscale serve config forwards to serve_found; a bad entry fails the stack.
+# A direct forward (to direct_found) skips the gateway: tailscale terminates TLS with the node's own
+# certificate and hands a service the caller's address in a PROXY protocol header, which no path
+# through the gateway carries. Only a protocol port may be one.
 collect_serve_ports() {
-    local stack=$1 file=$2 name entries forwards port
+    local stack=$1 file=$2 name entries forwards directs port
     name="gateway/$(basename "$file")"
     if grep -qE '"(HTTPS|Web|Handlers|Proxy)"' "$file"; then
         fail "$stack" "$name terminates TLS in tailscale instead of forwarding TCP to the gateway"
@@ -83,9 +86,14 @@ collect_serve_ports() {
     entries=$(grep -oE '"[0-9]+"[[:space:]]*:' "$file" | grep -oE '[0-9]+')
     forwards=$(grep -oE '"[0-9]+"[[:space:]]*:[[:space:]]*\{[[:space:]]*"TCPForward"[[:space:]]*:[[:space:]]*"127\.0\.0\.1:[0-9]+"' "$file" |
         sed -E 's/^"([0-9]+)".*:([0-9]+)"$/\1 \2/')
+    directs=$(grep -oE '"[0-9]+"[[:space:]]*:[[:space:]]*\{[[:space:]]*"TCPForward"[[:space:]]*:[[:space:]]*"[a-z][a-z0-9-]*:[0-9]+"[[:space:]]*,[[:space:]]*"TerminateTLS"[[:space:]]*:[[:space:]]*"\$\{TS_CERT_DOMAIN\}"[[:space:]]*,[[:space:]]*"ProxyProtocol"[[:space:]]*:[[:space:]]*2[[:space:]]*\}' "$file" |
+        grep -oE '^"[0-9]+"' | tr -d '"')
     for port in $entries; do
-        grep -qxE "$port $port" <<<"$forwards" ||
-            fail "$stack" "$name port $port is not a TCPForward to 127.0.0.1:$port"
+        if grep -qx "$port" <<<"$directs"; then
+            direct_found+=" $port "
+        elif ! grep -qxE "$port $port" <<<"$forwards"; then
+            fail "$stack" "$name port $port is neither a TCPForward to 127.0.0.1:$port nor a direct forward with TerminateTLS \${TS_CERT_DOMAIN} and ProxyProtocol 2"
+        fi
         serve_found+=" $port "
     done
 }
@@ -199,6 +207,7 @@ check_gateway() {
         fail "$stack" "overrides the template's serve config; PUBLIC_ACCESS is the only Funnel switch"
     fi
     serve_found=""
+    direct_found=""
     for file in "$repo"/gateway/*.json; do
         grep -q '"AllowFunnel"' "$file" &&
             fail "$stack" "gateway/$(basename "$file") opens Funnel itself; PUBLIC_ACCESS in config.env is the only Funnel switch"
@@ -223,6 +232,10 @@ check_gateway() {
 
     for port in $(tr ' ' '\n' <<<"$serve_found" | sort -un); do
         kind=$(kind_of "$stack" tailnet "$port")
+        if [[ $direct_found == *" $port "* ]] && [ "$kind" != protocol ]; then
+            fail "$stack" "tailnet port $port skips the gateway, which only a protocol port may"
+            continue
+        fi
         case $kind in
             web) [[ " $tailnet_sites " == *" $port "* ]] || fail "$stack" "web port $port is forwarded on the tailnet but has no {\$TAILNET_HOST}:$port site" ;;
             protocol)
