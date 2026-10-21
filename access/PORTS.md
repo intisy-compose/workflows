@@ -30,7 +30,6 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 | storage | dashboard | web | 443 | 8442 |
 | storage | Syncthing GUI, this host only (the tailnet reaches only its sync protocol) | web | - | 8443 |
 | storage | Samba | protocol | 445 | - |
-| storage | dashboard's join API, straight from tailscale with a PROXY protocol header, the one way it learns the caller's tailnet address | protocol | 8447 | - |
 | storage | Syncthing sync | protocol | 22000 | - |
 | storage | Syncthing sync of each further node on a host, reserved | protocol | 22001-22099 | - |
 | storage | Kopia server | protocol | 51515 | - |

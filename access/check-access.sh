@@ -73,29 +73,40 @@ caddy_sites() {
     '
 }
 
-# Adds the tailnet ports a tailscale serve config forwards to serve_found; a bad entry fails the stack.
-# A direct forward (to direct_found) skips the gateway: tailscale terminates TLS with the node's own
-# certificate and hands a service the caller's address in a PROXY protocol header, which no path
-# through the gateway carries. Only a protocol port may be one.
+# Adds the tailnet ports a tailscale serve config forwards to serve_found, and those it forwards with a
+# PROXY protocol header to proxied_found; a bad entry fails the stack. Only :443 reads such a header
+# (the template's TAILNET_PROXY_PROTOCOL), so no other port may send one.
 collect_serve_ports() {
-    local stack=$1 file=$2 name entries forwards directs port
+    local stack=$1 file=$2 name entries forwards proxied port
     name="gateway/$(basename "$file")"
     if grep -qE '"(HTTPS|Web|Handlers|Proxy)"' "$file"; then
         fail "$stack" "$name terminates TLS in tailscale instead of forwarding TCP to the gateway"
     fi
     entries=$(grep -oE '"[0-9]+"[[:space:]]*:' "$file" | grep -oE '[0-9]+')
-    forwards=$(grep -oE '"[0-9]+"[[:space:]]*:[[:space:]]*\{[[:space:]]*"TCPForward"[[:space:]]*:[[:space:]]*"127\.0\.0\.1:[0-9]+"' "$file" |
-        sed -E 's/^"([0-9]+)".*:([0-9]+)"$/\1 \2/')
-    directs=$(grep -oE '"[0-9]+"[[:space:]]*:[[:space:]]*\{[[:space:]]*"TCPForward"[[:space:]]*:[[:space:]]*"[a-z][a-z0-9-]*:[0-9]+"[[:space:]]*,[[:space:]]*"TerminateTLS"[[:space:]]*:[[:space:]]*"\$\{TS_CERT_DOMAIN\}"[[:space:]]*,[[:space:]]*"ProxyProtocol"[[:space:]]*:[[:space:]]*2[[:space:]]*\}' "$file" |
-        grep -oE '^"[0-9]+"' | tr -d '"')
+    forwards=$(grep -oE '"[0-9]+"[[:space:]]*:[[:space:]]*\{[[:space:]]*"TCPForward"[[:space:]]*:[[:space:]]*"127\.0\.0\.1:[0-9]+"[[:space:]]*(,[[:space:]]*"ProxyProtocol"[[:space:]]*:[[:space:]]*2[[:space:]]*)?\}' "$file" |
+        sed -E 's/^"([0-9]+)".*"127\.0\.0\.1:([0-9]+)".*$/\1 \2/')
+    proxied=$(grep -oE '"[0-9]+"[[:space:]]*:[[:space:]]*\{[^}]*"ProxyProtocol"' "$file" | grep -oE '^"[0-9]+"' | tr -d '"')
     for port in $entries; do
-        if grep -qx "$port" <<<"$directs"; then
-            direct_found+=" $port "
-        elif ! grep -qxE "$port $port" <<<"$forwards"; then
-            fail "$stack" "$name port $port is neither a TCPForward to 127.0.0.1:$port nor a direct forward with TerminateTLS \${TS_CERT_DOMAIN} and ProxyProtocol 2"
+        if ! grep -qxE "$port $port" <<<"$forwards"; then
+            fail "$stack" "$name port $port is not a TCPForward to 127.0.0.1:$port (with at most \"ProxyProtocol\": 2)"
+        elif grep -qx "$port" <<<"$proxied"; then
+            [ "$port" = 443 ] || fail "$stack" "$name sends port $port a PROXY protocol header, which only the gateway's :443 reads"
+            proxied_found+=" $port "
         fi
         serve_found+=" $port "
     done
+}
+
+# The gateway's :443 requires a PROXY protocol header exactly when serve.json sends one: a header the
+# gateway skips breaks TLS, and a header it requires but never gets refuses every caller.
+check_proxy_protocol() {
+    local stack=$1 requires=0
+    grep -qE '^[[:space:]]*TAILNET_PROXY_PROTOCOL:[[:space:]]*["\047]?require["\047]?[[:space:]]*$' "${compose_files[@]}" && requires=1
+    if [[ $proxied_found == *" 443 "* ]]; then
+        [ "$requires" = 1 ] || fail "$stack" "serve.json sends 443 a PROXY protocol header but the gateway does not set TAILNET_PROXY_PROTOCOL: require"
+    elif [ "$requires" = 1 ]; then
+        fail "$stack" "the gateway sets TAILNET_PROXY_PROTOCOL: require but serve.json does not forward 443 with \"ProxyProtocol\": 2"
+    fi
 }
 
 # Resolves ${VAR:-default} to its default and prints "address host_port container_port".
@@ -207,7 +218,7 @@ check_gateway() {
         fail "$stack" "overrides the template's serve config; PUBLIC_ACCESS is the only Funnel switch"
     fi
     serve_found=""
-    direct_found=""
+    proxied_found=""
     for file in "$repo"/gateway/*.json; do
         grep -q '"AllowFunnel"' "$file" &&
             fail "$stack" "gateway/$(basename "$file") opens Funnel itself; PUBLIC_ACCESS in config.env is the only Funnel switch"
@@ -215,6 +226,7 @@ check_gateway() {
     done
     [ "$(grep -v '^[[:space:]]*$' "$repo/gateway/serve.json" | tail -n 2 | tr -d '[:space:]')" = "}}" ] ||
         fail "$stack" "gateway/serve.json does not end with the TCP block's '  }' and the closing '}' the template's tailscale.sh extends"
+    check_proxy_protocol "$stack"
 
     while read -r address imports_tailnet tls; do
         [ "$tls" = 0 ] || fail "$stack" "sites.caddy sets tls itself; certificates come only from 'import tailnet'"
@@ -232,10 +244,6 @@ check_gateway() {
 
     for port in $(tr ' ' '\n' <<<"$serve_found" | sort -un); do
         kind=$(kind_of "$stack" tailnet "$port")
-        if [[ $direct_found == *" $port "* ]] && [ "$kind" != protocol ]; then
-            fail "$stack" "tailnet port $port skips the gateway, which only a protocol port may"
-            continue
-        fi
         case $kind in
             web) [[ " $tailnet_sites " == *" $port "* ]] || fail "$stack" "web port $port is forwarded on the tailnet but has no {\$TAILNET_HOST}:$port site" ;;
             protocol)

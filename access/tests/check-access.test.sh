@@ -128,35 +128,43 @@ expect "tailscale serve terminating TLS fails" 1 "gateway/serve.json terminates 
 
 new_stacks
 sed -i 's/"443": { "TCPForward": "127.0.0.1:443" }/"443": { "TCPForward": "127.0.0.1:8080" }/' "$demo/gateway/serve.json"
-expect "forward to another port fails" 1 "gateway/serve.json port 443 is neither a TCPForward to 127.0.0.1:443"
+expect "forward to another port fails" 1 "gateway/serve.json port 443 is not a TCPForward to 127.0.0.1:443"
 
 new_stacks
 sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"22000": { "TCPForward": "127.0.0.1:22000" },\n    "8384": { "TCPForward": "127.0.0.1:8384" }/' "$demo/gateway/serve.json"
 expect "tailnet port missing from the table fails" 1 "forwards tailnet port 8384, which is not a web or protocol port in PORTS.md"
 
-add_direct_forward() {
-    sed -i "s/\"22000\": { \"TCPForward\": \"127.0.0.1:22000\" }/&,\n    \"8447\": { \"TCPForward\": \"api:8447\"$1 }/" "$demo/gateway/serve.json"
+proxy_443() {
+    sed -i 's/"443": { "TCPForward": "127.0.0.1:443" }/"443": { "TCPForward": "127.0.0.1:443", "ProxyProtocol": 2 }/' "$demo/gateway/serve.json"
+}
+require_proxy_protocol() {
+    sed -i 's/^    container_name: demo-gateway$/&\n    environment:\n      TAILNET_PROXY_PROTOCOL: require/' "$demo/docker-compose.yml"
 }
 
 new_stacks
-add_direct_forward ', "TerminateTLS": "${TS_CERT_DOMAIN}", "ProxyProtocol": 2'
-printf '| demo | join API | protocol | 8447 | - |\n' >>"$PORTS_TABLE"
-expect "direct forward with TLS and PROXY protocol on a protocol port passes" 0 "all 2 stacks"
+proxy_443
+require_proxy_protocol
+expect "443 with a PROXY protocol header the gateway requires passes" 0 "all 2 stacks"
 
 new_stacks
-add_direct_forward ', "TerminateTLS": "${TS_CERT_DOMAIN}"'
-printf '| demo | join API | protocol | 8447 | - |\n' >>"$PORTS_TABLE"
-expect "direct forward without PROXY protocol fails" 1 "port 8447 is neither a TCPForward to 127.0.0.1:8447 nor a direct forward"
+proxy_443
+expect "a PROXY protocol header the gateway does not require fails" 1 "serve.json sends 443 a PROXY protocol header but the gateway does not set TAILNET_PROXY_PROTOCOL: require"
 
 new_stacks
-add_direct_forward ''
-printf '| demo | join API | protocol | 8447 | - |\n' >>"$PORTS_TABLE"
-expect "plain forward to a service fails" 1 "port 8447 is neither a TCPForward"
+require_proxy_protocol
+expect "requiring a header serve.json never sends fails" 1 "the gateway sets TAILNET_PROXY_PROTOCOL: require but serve.json does not forward 443"
 
 new_stacks
-add_direct_forward ', "TerminateTLS": "${TS_CERT_DOMAIN}", "ProxyProtocol": 2'
-printf '| demo | join UI | web | 8447 | 8447 |\n' >>"$PORTS_TABLE"
-expect "direct forward on a web port fails" 1 "tailnet port 8447 skips the gateway, which only a protocol port may"
+sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"22000": { "TCPForward": "127.0.0.1:22000", "ProxyProtocol": 2 }/' "$demo/gateway/serve.json"
+expect "a PROXY protocol header on another port fails" 1 "sends port 22000 a PROXY protocol header, which only the gateway's :443 reads"
+
+new_stacks
+sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"22000": { "TCPForward": "127.0.0.1:22000", "TerminateTLS": "${TS_CERT_DOMAIN}" }/' "$demo/gateway/serve.json"
+expect "tailscale terminating TLS on a forward fails" 1 "port 22000 is not a TCPForward to 127.0.0.1:22000"
+
+new_stacks
+sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"22000": { "TCPForward": "api:22000" }/' "$demo/gateway/serve.json"
+expect "a forward straight to a service fails" 1 "port 22000 is not a TCPForward to 127.0.0.1:22000"
 
 new_stacks
 sed -i '/"22000"/d; s/"127.0.0.1:443" },/"127.0.0.1:443" }/' "$demo/gateway/serve.json"
