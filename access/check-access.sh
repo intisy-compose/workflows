@@ -259,7 +259,7 @@ check_gateway() {
 
     while read -r row_stack kind tailnet host; do
         [ "$row_stack" = "$stack" ] || continue
-        if [ "$kind" != sync ] && [ "$tailnet" != - ] && [[ $tailnet != *-* ]] && [[ $serve_found != *" $tailnet "* ]]; then
+        if [ "$tailnet" != - ] && [[ $tailnet != *-* ]] && [[ $serve_found != *" $tailnet "* ]]; then
             fail "$stack" "PORTS.md lists tailnet port $tailnet but serve.json does not forward it"
         fi
         if [ "$kind" = web ] && [ "$host" != - ]; then
