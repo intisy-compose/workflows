@@ -31,10 +31,10 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 | storage | dashboard | web | 443 | 8442 |
 | storage | Syncthing GUI, this host only (the tailnet reaches only its sync protocol) | web | - | 8443 |
 | storage | Samba | protocol | 445 | - |
-| storage | Syncthing sync | sync | 22000 | - |
+| storage | Syncthing sync | sync | 22000 | 22000 |
 | storage | Syncthing sync of the host agent's native nodes | sync | 22001-22020 | - |
-| storage | Syncthing sync of the nodes service's nodes | sync | 22021-22099 | - |
-| storage | bridge relay | sync | - | - |
+| storage | Syncthing sync of the nodes service's nodes | sync | 22021-22099 | 22021-22099 |
+| storage | bridge relay | sync | 22100 | 22100 |
 | storage | Kopia server | protocol | 51515 | - |
 | storage | Syncthing GUIs and APIs of the Windows host agent's native nodes (host processes, not compose ports; their sync ports are in 22001-22099) | api | - | 8450-8469 |
 | hindsight | control plane | web | 443 | 9999 |
