@@ -102,6 +102,24 @@ sed -i 's/^| demo | API | api | - | 8402 |$/&\n| demo | API2 | api | 8403 | 8403
 expect "api row on the tailnet fails" 1 "PORTS.md puts api port 8403 on the tailnet"
 
 new_stacks
+printf '| demo | peer sync | sync | - | 22050 |\n' >>"$PORTS_TABLE"
+publish_extra "22050:22050"
+expect "a sync port published on all interfaces passes" 0 "all 2 stacks"
+
+new_stacks
+sed -i 's/^| demo | sync | protocol | 22000 | - |$/| demo | sync | sync | 22000 | - |/' "$PORTS_TABLE"
+expect "a sync port forwarded in serve.json passes" 0 "all 2 stacks"
+
+new_stacks
+printf '| demo | peer sync | protocol | - | 22050 |\n' >>"$PORTS_TABLE"
+publish_extra "22050:22050"
+expect "a protocol port published on all interfaces still fails" 1 "PORTS.md publishes protocol port 22050 on the host"
+
+new_stacks
+printf '| demo | odd | tunnel | - | - |\n' >>"$PORTS_TABLE"
+expect "an unknown kind in PORTS.md fails by name" 1 "FAIL demo: PORTS.md row has the unknown kind 'tunnel'"
+
+new_stacks
 sed -i 's/^| demo | sync | protocol | 22000 | - |$/| demo | sync | protocol | 22000 | 22000 |/' "$PORTS_TABLE"
 expect "protocol row on the host fails" 1 "PORTS.md publishes protocol port 22000 on the host"
 
@@ -132,7 +150,7 @@ expect "forward to another port fails" 1 "gateway/serve.json port 443 is not a T
 
 new_stacks
 sed -i 's/"22000": { "TCPForward": "127.0.0.1:22000" }/"22000": { "TCPForward": "127.0.0.1:22000" },\n    "8384": { "TCPForward": "127.0.0.1:8384" }/' "$demo/gateway/serve.json"
-expect "tailnet port missing from the table fails" 1 "forwards tailnet port 8384, which is not a web or protocol port in PORTS.md"
+expect "tailnet port missing from the table fails" 1 "forwards tailnet port 8384, which is not a web, protocol or sync port in PORTS.md"
 
 proxy_443() {
     sed -i 's/"443": { "TCPForward": "127.0.0.1:443" }/"443": { "TCPForward": "127.0.0.1:443", "ProxyProtocol": 2 }/' "$demo/gateway/serve.json"

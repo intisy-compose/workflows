@@ -12,6 +12,7 @@ tailnet and on loopback) and `specs/2026-10-20-connect-devices-design.md` (this 
 | `web` | through the shared gateway only: a TLS site on the tailnet name and an `http://:<port>` site published as `127.0.0.1:<port>:<port>`; a UI on the tailnet has both |
 | `api` | `127.0.0.1` only, published by the service itself |
 | `protocol` | the tailnet only, through the gateway's `serve.json`; never on the host's other interfaces |
+| `sync` | every interface, TCP or UDP; the protocol authenticates every peer by device ID (Syncthing sync and its relay) |
 | `public` | anywhere; only in a stack listed under public stacks below |
 
 Public access is one switch for every stack on the shared gateway: `PUBLIC_ACCESS=true` in its
@@ -30,8 +31,10 @@ means none. A range reserves ports a stack takes as it grows; the check accepts 
 | storage | dashboard | web | 443 | 8442 |
 | storage | Syncthing GUI, this host only (the tailnet reaches only its sync protocol) | web | - | 8443 |
 | storage | Samba | protocol | 445 | - |
-| storage | Syncthing sync | protocol | 22000 | - |
-| storage | Syncthing sync of each further node on a host, reserved | protocol | 22001-22099 | - |
+| storage | Syncthing sync | sync | 22000 | - |
+| storage | Syncthing sync of the host agent's native nodes | sync | 22001-22020 | - |
+| storage | Syncthing sync of the nodes service's nodes | sync | 22021-22099 | - |
+| storage | bridge relay | sync | 22100 | - |
 | storage | Kopia server | protocol | 51515 | - |
 | storage | Syncthing GUIs and APIs of the Windows host agent's native nodes (host processes, not compose ports; their sync ports are in 22001-22099) | api | - | 8450-8469 |
 | hindsight | control plane | web | 443 | 9999 |

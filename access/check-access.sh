@@ -18,7 +18,7 @@ fail() { echo "FAIL $1: $2"; failures=$((failures + 1)); }
 table_rows() {
     tr -d '\r' <"$table" | awk -F'|' 'NF == 7 {
         for (i = 2; i <= 6; i++) gsub(/^[[:space:]`]+|[[:space:]`]+$/, "", $i)
-        if ($4 ~ /^(web|api|protocol|public)$/) print $2, $4, $5, $6
+        if ($4 != "kind" && $4 !~ /^-+$/) print $2, $4, $5, $6
     }'
 }
 
@@ -138,6 +138,7 @@ check_published_port() {
             [ "$address" = 127.0.0.1 ] && [ "$host_port" = "$container_port" ] ||
                 fail "$stack" "web port $host_port is not published as 127.0.0.1:$host_port:$host_port"
             ;;
+        sync) ;;
         api) [ "$address" = 127.0.0.1 ] || fail "$stack" "$service publishes api port $host_port on more than 127.0.0.1" ;;
         public) [[ " $public_stacks " == *" $stack "* ]] || fail "$stack" "publishes public port $host_port but is not a public stack" ;;
     esac
@@ -171,7 +172,9 @@ check_table_rows() {
             web) [ "$host" != - ] || fail "$stack" "PORTS.md gives a web row no host port; a web UI is also on 127.0.0.1" ;;
             api) [ "$tailnet" = - ] || fail "$stack" "PORTS.md puts api port $host on the tailnet" ;;
             protocol) [ "$host" = - ] || fail "$stack" "PORTS.md publishes protocol port $host on the host" ;;
+            sync) ;;
             public) [[ " $public_stacks " == *" $stack "* ]] || fail "$stack" "PORTS.md has a public row but the stack is not a public stack" ;;
+            *) fail "$stack" "PORTS.md row has the unknown kind '$kind'" ;;
         esac
         if [ "$host" != - ] && [[ $host != *-* ]] && ! grep -qE " $host \$" <<<"$published"; then
             fail "$stack" "PORTS.md lists host port $host but no compose file publishes it"
@@ -246,17 +249,17 @@ check_gateway() {
         kind=$(kind_of "$stack" tailnet "$port")
         case $kind in
             web) [[ " $tailnet_sites " == *" $port "* ]] || fail "$stack" "web port $port is forwarded on the tailnet but has no {\$TAILNET_HOST}:$port site" ;;
-            protocol)
+            protocol | sync)
                 [[ $funnel_capable_ports != *" $port "* ]] ||
-                    fail "$stack" "protocol port $port is one Funnel carries; PUBLIC_ACCESS would open it to the internet"
+                    fail "$stack" "$kind port $port is one Funnel carries; PUBLIC_ACCESS would open it to the internet"
                 ;;
-            *) fail "$stack" "forwards tailnet port $port, which is not a web or protocol port in PORTS.md" ;;
+            *) fail "$stack" "forwards tailnet port $port, which is not a web, protocol or sync port in PORTS.md" ;;
         esac
     done
 
     while read -r row_stack kind tailnet host; do
         [ "$row_stack" = "$stack" ] || continue
-        if [ "$tailnet" != - ] && [[ $tailnet != *-* ]] && [[ $serve_found != *" $tailnet "* ]]; then
+        if [ "$kind" != sync ] && [ "$tailnet" != - ] && [[ $tailnet != *-* ]] && [[ $serve_found != *" $tailnet "* ]]; then
             fail "$stack" "PORTS.md lists tailnet port $tailnet but serve.json does not forward it"
         fi
         if [ "$kind" = web ] && [ "$host" != - ]; then
