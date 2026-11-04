@@ -6,8 +6,8 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=${1:-$(cd "$here/../.." && pwd)}
 table=${PORTS_TABLE:-$here/PORTS.md}
-template="$here/../gateway"
-vendored_files="Caddyfile gateway.yml tailscale.sh"
+template=${GATEWAY_TEMPLATE:-$here/../gateway}
+vendored_files="Caddyfile gateway.yml gateway.sh tailscale.sh"
 funnel_capable_ports=" 443 8443 10000 "
 
 failures=0
@@ -61,16 +61,36 @@ published_ports() {
     '
 }
 
-# "address imports_tailnet sets_tls" for every top-level block of a Caddyfile.
+# "address imports_tailnet sets_tls bind" for every top-level block of a Caddyfile, where bind is the
+# block's first `bind` or `default_bind` line joined by commas, or "-".
 caddy_sites() {
     tr -d '\r' <"$1" | awk '
         /^[[:space:]]*(#|$)/ { next }
-        depth == 0 && /\{[[:space:]]*$/ { address = $0; sub(/[[:space:]]*\{[[:space:]]*$/, "", address); tailnet = 0; tls = 0 }
+        depth == 0 && /\{[[:space:]]*$/ { address = $0; sub(/[[:space:]]*\{[[:space:]]*$/, "", address); tailnet = 0; tls = 0; bind = "-" }
         depth == 1 && /^[[:space:]]*import[[:space:]]+tailnet[[:space:]]*$/ { tailnet = 1 }
         /^[[:space:]]*tls([[:space:]]|\{|$)/ { tls = 1 }
+        bind == "-" && /^[[:space:]]*(default_)?bind([[:space:]]|$)/ { bind = $0; sub(/^[[:space:]]+/, "", bind); gsub(/[[:space:]]+/, ",", bind) }
         { opened = gsub(/\{/, "{"); closed = gsub(/\}/, "}"); depth += opened - closed }
-        depth == 0 && (opened || closed) { print (address == "" ? "<global>" : address), tailnet, tls }
+        depth == 0 && (opened || closed) { print (address == "" ? "<global>" : address), tailnet, tls, bind }
     '
+}
+
+# The template binds every http://:<port> site to the namespace's Docker network addresses and every
+# tailnet site to 127.0.0.1, because tailscale in userspace mode hands each tailnet connection to a
+# port serve.json does not forward to 127.0.0.1 of this namespace: a local site listening there would
+# answer on the tailnet.
+check_template_binding() {
+    local address imports_tailnet tls bind global_bind="" tailnet_bind=""
+    while read -r address imports_tailnet tls bind; do
+        [ "$address" = "<global>" ] && global_bind=$bind
+        [ "$address" = "(tailnet)" ] && tailnet_bind=$bind
+    done < <(caddy_sites "$template/Caddyfile")
+    [ "$global_bind" = 'default_bind,{$GATEWAY_LOCAL_ADDRESSES}' ] ||
+        fail gateway "workflows gateway/Caddyfile does not set 'default_bind {\$GATEWAY_LOCAL_ADDRESSES}', so local sites listen on 127.0.0.1 and the tailnet reaches them"
+    [ "$tailnet_bind" = "bind,127.0.0.1" ] ||
+        fail gateway "workflows gateway/Caddyfile's (tailnet) snippet does not 'bind 127.0.0.1', where serve.json forwards"
+    grep -qE '^[[:space:]]*entrypoint:[[:space:]]*\["/bin/sh",[[:space:]]*"/etc/caddy/gateway\.sh"\]' "$template/gateway.yml" ||
+        fail gateway "workflows gateway/gateway.yml does not start the gateway through gateway.sh, which sets GATEWAY_LOCAL_ADDRESSES"
 }
 
 # Adds the tailnet ports a tailscale serve config forwards to serve_found, and those it forwards with a
@@ -231,8 +251,9 @@ check_gateway() {
         fail "$stack" "gateway/serve.json does not end with the TCP block's '  }' and the closing '}' the template's tailscale.sh extends"
     check_proxy_protocol "$stack"
 
-    while read -r address imports_tailnet tls; do
+    while read -r address imports_tailnet tls bind; do
         [ "$tls" = 0 ] || fail "$stack" "sites.caddy sets tls itself; certificates come only from 'import tailnet'"
+        [ "$bind" = - ] || fail "$stack" "sites.caddy block '$address' sets its own listener ('${bind//,/ }'); the template's Caddyfile binds every site"
         if [[ $address =~ ^\{\$TAILNET_HOST\}:([0-9]+)$ ]]; then
             port=${BASH_REMATCH[1]}
             tailnet_sites+=" $port"
@@ -240,6 +261,8 @@ check_gateway() {
             [[ $serve_found == *" $port "* ]] || fail "$stack" "tailnet site :$port is not forwarded in serve.json"
         elif [[ $address =~ ^http://:([0-9]+)$ ]]; then
             local_sites+=" ${BASH_REMATCH[1]} "
+            [ "$imports_tailnet" = 0 ] ||
+                fail "$stack" "local site :${BASH_REMATCH[1]} imports tailnet, which binds it to 127.0.0.1 where the tailnet reaches it"
         elif [[ $address != \(* ]]; then
             fail "$stack" "sites.caddy has the site '$address', neither {\$TAILNET_HOST}:<port> nor http://:<port>"
         fi
@@ -270,6 +293,7 @@ check_gateway() {
 
 rows=$(table_rows)
 public_stacks=$(listed_stacks "Public stacks")
+check_template_binding
 
 for repo in "$root"/*-compose; do
     stack=$(basename "$repo" -compose)

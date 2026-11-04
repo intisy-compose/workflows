@@ -43,7 +43,7 @@ new_stacks() {
     write_table
     local demo="$scratch/stacks/demo-compose" arcade="$scratch/stacks/arcade-compose"
     mkdir -p "$demo/gateway" "$arcade"
-    cp "$template/Caddyfile" "$template/gateway.yml" "$template/tailscale.sh" "$demo/gateway/"
+    cp "$template/Caddyfile" "$template/gateway.yml" "$template/gateway.sh" "$template/tailscale.sh" "$demo/gateway/"
     cat >"$demo/docker-compose.yml" <<'EOF'
 services:
   api:
@@ -221,6 +221,46 @@ expect "serve.json the toggle cannot extend fails" 1 "gateway/serve.json does no
 new_stacks
 echo "# drifted" >>"$demo/gateway/tailscale.sh"
 expect "drifted vendored tailscale.sh fails" 1 "gateway/tailscale.sh differs"
+
+new_stacks
+echo "# drifted" >>"$demo/gateway/gateway.sh"
+expect "drifted vendored gateway.sh fails" 1 "gateway/gateway.sh differs"
+
+new_stacks
+sed -i 's/^http:\/\/:8401 {$/&\n\timport tailnet/' "$demo/gateway/sites.caddy"
+expect "a local site importing tailnet fails" 1 "local site :8401 imports tailnet, which binds it to 127.0.0.1"
+
+new_stacks
+sed -i 's/^http:\/\/:8401 {$/&\n\tbind 0.0.0.0/' "$demo/gateway/sites.caddy"
+expect "a local site binding itself fails" 1 "sites.caddy block 'http://:8401' sets its own listener ('bind 0.0.0.0')"
+
+new_stacks
+sed -i 's/^(app) {$/&\n\tbind 127.0.0.1/' "$demo/gateway/sites.caddy"
+expect "a snippet binding itself fails" 1 "sites.caddy block '(app)' sets its own listener"
+
+# A broken copy of the template, against which the demo stack is vendored, so only the binding fails.
+broken_template() {
+    new_stacks
+    rm -rf "$scratch/template"
+    cp -r "$template" "$scratch/template"
+    sed -i "$1" "$scratch/template/$2"
+    cp "$scratch/template/$2" "$demo/gateway/$2"
+    output=$(GATEWAY_TEMPLATE="$scratch/template" bash "$check" "$scratch/stacks" 2>&1)
+    status=$?
+    if [ "$status" -eq 1 ] && grep -qF -- "$4" <<<"$output" && [ "$(grep -c '^FAIL' <<<"$output")" -eq 1 ]; then
+        echo "ok   $3"
+    else
+        echo "FAIL $3: exit $status, wanted only '$4'"
+        echo "$output" | sed 's/^/     /'
+        failures=$((failures + 1))
+    fi
+}
+broken_template '/default_bind/d' Caddyfile "a template whose local sites listen everywhere fails" \
+    "workflows gateway/Caddyfile does not set 'default_bind {\$GATEWAY_LOCAL_ADDRESSES}'"
+broken_template 's/^\tbind 127.0.0.1$/\tbind 0.0.0.0/' Caddyfile "a template whose tailnet sites listen everywhere fails" \
+    "(tailnet) snippet does not 'bind 127.0.0.1'"
+broken_template '/entrypoint:/d' gateway.yml "a template that starts caddy without gateway.sh fails" \
+    "does not start the gateway through gateway.sh"
 
 new_stacks
 publish_extra "8080"
