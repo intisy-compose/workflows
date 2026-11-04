@@ -10,4 +10,6 @@ permissions:
 
 jobs:
   self-test:
+    # A pull request from this repository already ran on its push; only a fork's needs this run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork
     uses: ./.github/workflows/self-test.yml
