@@ -1,0 +1,5 @@
+volume cluster
+dump app-20261019-190000.dump 64
+dump app-20261019-200000.dump 64
+expect-action Keep
+expect-validator-runs 0

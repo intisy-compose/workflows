@@ -1,81 +1,97 @@
-# Pester 3.4: the restore decision, with the volume check shadowed so no test reaches Docker.
+# Pester 3.4: the restore decision over the shared cases in cases/ (their format is in the header of
+# restore-decision.test.sh, which reads the same files), with the volume check shadowed so no test reaches Docker.
 
 . (Join-Path (Split-Path $PSScriptRoot) "data-on-disk.ps1")
 
 $global:volumeIsEmpty = $true
 $global:volumeChecks = @()
+$global:validatorRuns = 0
 function Test-DatabaseVolumeIsEmpty([string]$Volume) {
     $global:volumeChecks += $Volume
     return $global:volumeIsEmpty
 }
 
-$dumps = Join-Path ([System.IO.Path]::GetTempPath()) "restore-decision-$([guid]::NewGuid().ToString('N'))"
-$emptyFolder = Join-Path $dumps "empty"
-New-Item -ItemType Directory -Path $dumps, $emptyFolder | Out-Null
-foreach ($name in "app-20261019-190000.dump", "app-20261019-200000.dump") {
-    [System.IO.File]::WriteAllBytes((Join-Path $dumps $name), (New-Object byte[] 64))
-}
+$volume = "stack_db"
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) "restore-decision-$([guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $scratch | Out-Null
 
-$rejectAll = { param($dump) "it holds no table data" }
-$acceptAll = { param($dump) "" }
-$rejectNewest = { param($dump) if ($dump.Name -eq "app-20261019-200000.dump") { "pg_restore cannot list it" } }
-
-Describe "Get-RestoreDecision" {
-    BeforeEach { $global:volumeIsEmpty = $true; $global:volumeChecks = @() }
-
-    It "asks about the volume it was given" {
-        Get-RestoreDecision "stack_db" $dumps "app-*.dump" $acceptAll | Out-Null
-        $global:volumeChecks | Should Be @("stack_db")
+function Read-DecisionCase([System.IO.FileInfo]$File) {
+    $case = [pscustomobject]@{
+        Name = $File.BaseName; VolumeIsEmpty = $true; FolderMissing = $false; Pattern = "app-*.dump"
+        Dumps = @(); HasValidator = $true; Rejections = @(); AllowFresh = $false
+        ExpectedAction = $null; ExpectedDump = $null; ExpectedRejected = @(); ExpectedValidatorRuns = $null
     }
-    It "refuses an empty volume when complete dumps exist but none is restorable" {
-        $decision = Get-RestoreDecision "stack_db" $dumps "app-*.dump" $rejectAll
-        $decision.Action | Should Be "Refuse"
-        $decision.Dump | Should Be $null
-        @($decision.Rejected.Name) | Should Be @("app-20261019-200000.dump", "app-20261019-190000.dump")
-        @($decision.Rejected.Reason | Sort-Object -Unique) | Should Be @("it holds no table data")
-    }
-    It "starts fresh on that same volume with -Fresh" {
-        (Get-RestoreDecision "stack_db" $dumps "app-*.dump" $rejectAll -AllowFresh $true).Action | Should Be "Fresh"
-    }
-    It "starts fresh with -Fresh even when a dump would restore" {
-        (Get-RestoreDecision "stack_db" $dumps "app-*.dump" $acceptAll -AllowFresh $true).Action | Should Be "Fresh"
-    }
-    It "starts fresh on an empty volume with no dumps" {
-        (Get-RestoreDecision "stack_db" $emptyFolder "app-*.dump" $rejectAll).Action | Should Be "Fresh"
-    }
-    It "starts fresh on an empty volume with a missing folder" {
-        (Get-RestoreDecision "stack_db" (Join-Path $dumps "missing") "app-*.dump" $rejectAll).Action | Should Be "Fresh"
-    }
-    It "restores the newest restorable dump and lists the newer ones it skipped" {
-        $decision = Get-RestoreDecision "stack_db" $dumps "app-*.dump" $rejectNewest
-        $decision.Action | Should Be "Restore"
-        $decision.Dump.Name | Should Be "app-20261019-190000.dump"
-        @($decision.Rejected.Name) | Should Be @("app-20261019-200000.dump")
-    }
-    It "restores the newest dump when no validator is given" {
-        (Get-RestoreDecision "stack_db" $dumps "app-*.dump").Dump.Name | Should Be "app-20261019-200000.dump"
-    }
-    foreach ($fresh in $false, $true) {
-        It "never restores into a volume that holds data (-Fresh $fresh)" {
-            $global:volumeIsEmpty = $false
-            $decision = Get-RestoreDecision "stack_db" $dumps "app-*.dump" $acceptAll -AllowFresh $fresh
-            $decision.Action | Should Be "Keep"
-            $decision.Dump | Should Be $null
+    foreach ($line in [System.IO.File]::ReadAllLines($File.FullName)) {
+        if (-not $line -or $line.StartsWith("#")) { continue }
+        $key, $value = $line -split " ", 2
+        switch ($key) {
+            "volume" { $case.VolumeIsEmpty = ($value -eq "empty") }
+            "folder" { $case.FolderMissing = ($value -eq "missing") }
+            "pattern" { $case.Pattern = $value }
+            "dump" { $name, $bytes = $value -split " ", 2; $case.Dumps += [pscustomobject]@{ Name = $name; Bytes = [int]$bytes } }
+            "validator" { $case.HasValidator = ($value -ne "none") }
+            "reject" { $name, $reason = $value -split " ", 2; $case.Rejections += [pscustomobject]@{ Name = $name; Reason = $reason } }
+            "fresh" { $case.AllowFresh = ($value -eq "true") }
+            "expect-action" { $case.ExpectedAction = $value }
+            "expect-dump" { $case.ExpectedDump = $value }
+            "expect-rejected" { $name, $reason = $value -split " ", 2; $case.ExpectedRejected += "$name`t$reason" }
+            "expect-validator-runs" { $case.ExpectedValidatorRuns = [int]$value }
+            default { throw "unknown key '$key' in $($File.Name)" }
         }
     }
-    It "does not run the validator for a volume that holds data" {
-        $global:volumeIsEmpty = $false
-        $global:validatorRuns = 0
-        Get-RestoreDecision "stack_db" $dumps "app-*.dump" { param($dump) $global:validatorRuns++; "" } | Out-Null
-        $global:validatorRuns | Should Be 0
+    return $case
+}
+
+function New-DumpFolder([object]$Case) {
+    $folder = Join-Path $scratch $Case.Name
+    if ($Case.FolderMissing) { return $folder }
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    foreach ($dump in $Case.Dumps) { [System.IO.File]::WriteAllBytes((Join-Path $folder $dump.Name), (New-Object byte[] $dump.Bytes)) }
+    return $folder
+}
+
+function New-Validator([object]$Case) {
+    if (-not $Case.HasValidator) { return $null }
+    $rejections = $Case.Rejections
+    return {
+        param($dump)
+        $global:validatorRuns++
+        foreach ($rejection in $rejections) {
+            if ($rejection.Name -eq "*" -or $rejection.Name -eq $dump.Name) { return $rejection.Reason }
+        }
+        return ""
+    }.GetNewClosure()
+}
+
+function Invoke-DecisionCase([object]$Case) {
+    $global:volumeIsEmpty = $Case.VolumeIsEmpty
+    $global:volumeChecks = @()
+    $global:validatorRuns = 0
+    return Get-RestoreDecision $volume (New-DumpFolder $Case) $Case.Pattern (New-Validator $Case) -AllowFresh $Case.AllowFresh
+}
+
+$cases = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "cases") -Filter "*.case" | Sort-Object Name | ForEach-Object { Read-DecisionCase $_ })
+
+Describe "Get-RestoreDecision over the shared cases" {
+    It "finds the cases" { $cases.Count -gt 0 | Should Be $true }
+    foreach ($case in $cases) {
+        It $case.Name {
+            $decision = Invoke-DecisionCase $case
+            ($global:volumeChecks -join ",") | Should Be $volume
+            $decision.Action | Should Be $case.ExpectedAction
+            if ($case.ExpectedDump) { $decision.Dump.Name | Should Be $case.ExpectedDump } else { $decision.Dump | Should Be $null }
+            (@($decision.Rejected | ForEach-Object { "$($_.Name)`t$($_.Reason)" }) -join "`n") | Should Be ($case.ExpectedRejected -join "`n")
+            if ($null -ne $case.ExpectedValidatorRuns) { $global:validatorRuns | Should Be $case.ExpectedValidatorRuns }
+        }
     }
 }
 
 Describe "Format-RestoreRefusal" {
-    $global:volumeIsEmpty = $true
-    $lines = Format-RestoreRefusal (Get-RestoreDecision "stack_db" $dumps "app-*.dump" $rejectAll) "stack_db" "data\backups" "up"
+    $refusal = Read-DecisionCase (Get-Item -LiteralPath (Join-Path $PSScriptRoot "cases\refuse-when-every-dump-is-rejected.case"))
+    $refusal.Name = "refusal-text"
+    $lines = Format-RestoreRefusal (Invoke-DecisionCase $refusal) $volume "data\backups" "up"
 
-    It "names the volume" { $lines[0] | Should Match "stack_db" }
+    It "names the volume" { $lines[0] | Should Match $volume }
     It "names every rejected dump with its reason" {
         @($lines | Where-Object { $_ -match "app-2026101.*: it holds no table data" }).Count | Should Be 2
     }
@@ -83,8 +99,8 @@ Describe "Format-RestoreRefusal" {
 }
 
 Describe "test cleanup" {
-    It "removes its dump folder" {
-        Remove-Item -LiteralPath $dumps -Recurse -Force
-        Test-Path -LiteralPath $dumps | Should Be $false
+    It "removes its dump folders" {
+        Remove-Item -LiteralPath $scratch -Recurse -Force
+        Test-Path -LiteralPath $scratch | Should Be $false
     }
 }

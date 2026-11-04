@@ -1,0 +1,4 @@
+volume empty
+reject * it holds no table data
+expect-action Fresh
+expect-validator-runs 0

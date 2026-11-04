@@ -1,0 +1,7 @@
+volume empty
+dump app-20261019-190000.dump 64
+dump app-20261019-200000.dump 64
+reject * it holds no table data
+fresh true
+expect-action Fresh
+expect-validator-runs 0
