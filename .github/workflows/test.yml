@@ -1,0 +1,13 @@
+name: Test the checks
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    uses: ./.github/workflows/self-test.yml

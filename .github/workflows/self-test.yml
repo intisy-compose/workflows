@@ -1,0 +1,45 @@
+name: Self-test
+
+# This repository's own suites: each check's fixture test and the data-on-disk helper's two twins over
+# the shared cases, the bash one on Ubuntu and the PowerShell one under Windows PowerShell 5.1.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  bash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Access check
+        run: bash access/tests/check-access.test.sh
+
+      - name: Volume check
+        run: bash data-on-disk/tests/check-volumes.test.sh
+
+      - name: CLI parity check
+        run: bash cli/tests/check-cli.test.sh
+
+      - name: Restore decision, bash twin
+        run: bash data-on-disk/tests/restore-decision.test.sh
+
+      - name: shellcheck
+        run: >-
+          shellcheck -x
+          cli/check-cli.sh cli/tests/check-cli.test.sh
+          data-on-disk/data-on-disk.sh data-on-disk/check-volumes.sh
+          data-on-disk/tests/check-volumes.test.sh data-on-disk/tests/restore-decision.test.sh
+
+  pester:
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Restore decision, PowerShell twin
+        shell: powershell
+        run: .\data-on-disk\tests\run-pester.ps1
