@@ -18,8 +18,8 @@ New-Item -ItemType Directory -Path $scratch | Out-Null
 function Read-DecisionCase([System.IO.FileInfo]$File) {
     $case = [pscustomobject]@{
         Name = $File.BaseName; VolumeIsEmpty = $true; Folder = "present"; Pattern = "app-*.dump"
-        Dumps = @(); Links = @(); HasValidator = $true; Rejections = @(); AllowFresh = $false
-        ExpectedAction = $null; ExpectedDump = $null; ExpectedRejected = @(); ExpectedValidatorRuns = $null
+        Dumps = @(); Links = @(); HasValidator = $true; Rejections = @(); Failures = @(); AllowFresh = $false
+        ExpectedError = $null; ExpectedAction = $null; ExpectedDump = $null; ExpectedRejected = @(); ExpectedValidatorRuns = $null
     }
     foreach ($line in [System.IO.File]::ReadAllLines($File.FullName)) {
         if (-not $line -or $line.StartsWith("#")) { continue }
@@ -32,7 +32,9 @@ function Read-DecisionCase([System.IO.FileInfo]$File) {
             "link" { $name, $target = $value -split " ", 2; $case.Links += [pscustomobject]@{ Name = $name; Target = $target } }
             "validator" { $case.HasValidator = ($value -ne "none") }
             "reject" { $name, $reason = $value -split " ", 2; $case.Rejections += [pscustomobject]@{ Name = $name; Reason = $reason } }
+            "fail" { $name, $message = $value -split " ", 2; $case.Failures += [pscustomobject]@{ Name = $name; Message = $message } }
             "fresh" { $case.AllowFresh = ($value -eq "true") }
+            "expect-error" { $case.ExpectedError = $value }
             "expect-action" { $case.ExpectedAction = $value }
             "expect-dump" { $case.ExpectedDump = $value }
             "expect-rejected" { $name, $reason = $value -split " ", 2; $case.ExpectedRejected += "$name`t$reason" }
@@ -86,9 +88,13 @@ function Test-ListingIsDenied([string]$Folder) {
 function New-Validator([object]$Case) {
     if (-not $Case.HasValidator) { return $null }
     $rejections = $Case.Rejections
+    $failures = $Case.Failures
     return {
         param($dump)
         $global:validatorRuns++
+        foreach ($failure in $failures) {
+            if ($failure.Name -eq "*" -or $failure.Name -eq $dump.Name) { throw $failure.Message }
+        }
         foreach ($rejection in $rejections) {
             if ($rejection.Name -eq "*" -or $rejection.Name -eq $dump.Name) { return $rejection.Reason }
         }
@@ -114,6 +120,14 @@ Describe "Get-RestoreDecision over the shared cases" {
         It $case.Name {
             if ($case.Links.Count -gt 0 -and -not $canCreateSymlink) {
                 Set-TestInconclusive "this shell may not create symlinks (not elevated, no Developer Mode); the bash run on Linux covers the case"
+                return
+            }
+            if ($case.ExpectedError) {
+                $thrown = $null
+                try { Invoke-DecisionCase $case | Out-Null } catch { $thrown = $_.Exception.Message }
+                ($global:volumeChecks -join ",") | Should Be $volume
+                $thrown | Should Be $case.ExpectedError
+                if ($null -ne $case.ExpectedValidatorRuns) { $global:validatorRuns | Should Be $case.ExpectedValidatorRuns }
                 return
             }
             $decision = Invoke-DecisionCase $case

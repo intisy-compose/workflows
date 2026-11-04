@@ -11,7 +11,10 @@
 #   link NAME TARGET              a symlink in the folder to the file TARGET beside it
 #   validator none                pass no rejection callback (default: one built from the reject lines)
 #   reject NAME|* REASON          what the callback answers for that dump; any other dump is restorable
+#   fail NAME|* MESSAGE           the callback cannot judge that dump: bash exits 1 printing MESSAGE,
+#                                 PowerShell throws MESSAGE (checked before the reject lines)
 #   fresh true|false              allow-fresh (default false)
+#   expect-error MESSAGE          the decision fails with MESSAGE instead of deciding
 #   expect-action ACTION          Keep, Restore, Fresh or Refuse
 #   expect-dump NAME              the dump to restore (default none)
 #   expect-rejected NAME REASON   one line per rejected dump, in order; {folder} stands for the folder's path
@@ -28,6 +31,7 @@ probe_log="$scratch/probes"
 validator_log="$scratch/validator-runs"
 volume_is_empty=true
 case_rejections=()
+case_failures=()
 
 database_volume_is_empty() {
     echo "$1" >>"$probe_log"
@@ -37,7 +41,13 @@ database_volume_is_empty() {
 case_rejection() {
     local name=${1##*/} rejection
     echo run >>"$validator_log"
-    for rejection in "${case_rejections[@]}"; do
+    for rejection in ${case_failures[@]+"${case_failures[@]}"}; do
+        if [ "${rejection%%$'\t'*}" = "*" ] || [ "${rejection%%$'\t'*}" = "$name" ]; then
+            echo "${rejection#*$'\t'}"
+            return 1
+        fi
+    done
+    for rejection in ${case_rejections[@]+"${case_rejections[@]}"}; do
         if [ "${rejection%%$'\t'*}" = "*" ] || [ "${rejection%%$'\t'*}" = "$name" ]; then
             echo "${rejection#*$'\t'}"
             return 0
@@ -75,11 +85,13 @@ undo_unlistable() {
 
 run_case() {
     local file=$1 name key value folder pattern="app-*.dump" fresh=false validator=case_rejection
-    local folder_state=present want_action="" want_dump="" want_rejected="" want_runs="" decision line
+    local folder_state=present want_action="" want_dump="" want_rejected="" want_runs="" want_error="" decision line
+    local decision_exit=0
     name=$(basename "$file" .case)
     folder="$scratch/$name"
     volume_is_empty=true
     case_rejections=()
+    case_failures=()
     : >"$probe_log"
     : >"$validator_log"
     local dump_specs=() link_specs=()
@@ -96,7 +108,9 @@ run_case() {
             link) link_specs+=("$value") ;;
             validator) [ "$value" = none ] && validator="" ;;
             reject) case_rejections+=("${value%% *}"$'\t'"${value#* }") ;;
+            fail) case_failures+=("${value%% *}"$'\t'"${value#* }") ;;
             fresh) fresh=$value ;;
+            expect-error) want_error=$value ;;
             expect-action) want_action=$value ;;
             expect-dump) want_dump=$value ;;
             expect-rejected) want_rejected+="${value%% *}"$'\t'"${value#* }"$'\n' ;;
@@ -114,8 +128,17 @@ run_case() {
     want_rejected=${want_rejected//\{folder\}/$folder}
 
     if [ "$folder_state" = unlistable ]; then make_unlistable "$folder"; fi
-    decision=$(restore_decision "$volume" "$folder" "$pattern" "$validator" "$fresh" 2>"$scratch/stderr")
+    decision=$(restore_decision "$volume" "$folder" "$pattern" "$validator" "$fresh" 2>"$scratch/stderr") || decision_exit=$?
     if [ "$folder_state" = unlistable ]; then undo_unlistable "$folder"; fi
+    if [ -n "$want_error" ]; then
+        check "$name: probed volume" "$volume" "$(cat "$probe_log")" &&
+            check "$name: fails" "failed" "$([ "$decision_exit" -ne 0 ] && echo failed || echo "exit 0")" &&
+            check "$name: decides nothing" "" "$decision" &&
+            check "$name: error" "yes" "$(grep -qF -- "$want_error" "$scratch/stderr" && echo yes || cat "$scratch/stderr")" &&
+            { [ -z "$want_runs" ] || check "$name: validator runs" "$want_runs" "$(wc -l <"$validator_log" | tr -d ' ')"; } &&
+            echo "ok   $name"
+        return
+    fi
     check "$name: probed volume" "$volume" "$(cat "$probe_log")" &&
         check "$name: action" "$want_action" "$(lines_with action "$decision")" &&
         check "$name: dump" "$want_dump" "$(lines_with dump "$decision")" &&
@@ -179,11 +202,17 @@ check "a decision prints its action, its dump, then each rejection" \
     echo "ok   a decision prints its action, its dump, then each rejection"
 
 volume_is_empty=true
-rejecting() { printf 'it holds\nno table data\n'; return 3; }
-check "a callback's lines join with spaces and its exit code is ignored" \
+rejecting() { printf 'it holds\nno table data\n'; }
+check "a callback's lines join with spaces" \
     "app-20261019-200000.dump"$'\t'"it holds no table data" \
     "$(lines_with rejected "$(restore_decision "$volume" "$dumps" "app-*.dump" rejecting false)" | head -n 1)" &&
-    echo "ok   a callback's lines join with spaces and its exit code is ignored"
+    echo "ok   a callback's lines join with spaces"
+
+silently_failing() { return 3; }
+check "a callback failing without output is named with its exit code" \
+    "silently_failing failed with exit code 3 (app-20261019-200000.dump)" \
+    "$(restore_decision "$volume" "$dumps" "app-*.dump" silently_failing false 2>&1 >/dev/null)" &&
+    echo "ok   a callback failing without output is named with its exit code"
 
 reading() { cat >/dev/null; echo "read stdin"; }
 check "a callback cannot swallow the dump list on stdin" \

@@ -1,0 +1,6 @@
+volume empty
+dump app-20261019-190000.dump 64
+dump app-20261019-200000.dump 64
+fail app-20261019-200000.dump docker could not run the probe (exit 125)
+expect-error docker could not run the probe (exit 125)
+expect-validator-runs 1
