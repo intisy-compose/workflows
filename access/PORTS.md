@@ -23,6 +23,11 @@ Funnel is switched on nowhere else.
 `tailnet` is the port on the stack's `ts.net` name, `host` the port published on this host; `-`
 means none. A range reserves ports a stack takes as it grows; the check accepts any port in it.
 
+Inside the gateway's network namespace every port not on the tailnet listens on the namespace's
+Docker address only, never on `127.0.0.1` or every address, which tailscale's userspace mode hands
+tailnet connections to; each service there declares its ports in `x-namespace-listeners`
+([`CONTENT.md`](../CONTENT.md#the-shared-gateway)).
+
 ## Ports
 
 | stack | serves | kind | tailnet | host |

@@ -43,7 +43,7 @@ new_stacks() {
     write_table
     local demo="$scratch/stacks/demo-compose" arcade="$scratch/stacks/arcade-compose"
     mkdir -p "$demo/gateway" "$arcade"
-    cp "$template/Caddyfile" "$template/gateway.yml" "$template/gateway.sh" "$template/tailscale.sh" "$demo/gateway/"
+    cp "$template/Caddyfile" "$template/gateway.yml" "$template/gateway.sh" "$template/namespace-address.sh" "$template/tailscale.sh" "$demo/gateway/"
     cat >"$demo/docker-compose.yml" <<'EOF'
 services:
   api:
@@ -261,6 +261,91 @@ broken_template 's/^\tbind 127.0.0.1$/\tbind 0.0.0.0/' Caddyfile "a template who
     "(tailnet) snippet does not 'bind 127.0.0.1'"
 broken_template '/entrypoint:/d' gateway.yml "a template that starts caddy without gateway.sh fails" \
     "does not start the gateway through gateway.sh"
+
+broken_template '/namespace-address\.sh:/d' gateway.yml "a template whose gateway cannot read its addresses fails" \
+    "does not mount namespace-address.sh"
+
+new_stacks
+echo "# drifted" >>"$demo/gateway/namespace-address.sh"
+expect "drifted vendored namespace-address.sh fails" 1 "gateway/namespace-address.sh differs"
+
+# Adds a service in the gateway's namespace with the given extra lines, then the given
+# x-namespace-listeners block (each argument one line).
+share_namespace() {
+    local extra=$1
+    shift
+    {
+        printf '  app:\n    image: app\n    network_mode: "service:gateway"\n%s' "$extra"
+        printf '\nx-namespace-listeners:\n'
+        printf '%s\n' "$@"
+    } >>"$demo/docker-compose.yml"
+}
+
+new_stacks
+share_namespace "" "  app:" '    "9100": gateway' '    "22000": tailnet' '    "22000/udp": tailnet'
+expect "an app in the namespace that declares its listeners passes" 0 "all 2 stacks"
+
+new_stacks
+share_namespace ""
+expect "an undeclared app in the namespace fails" 1 "app shares the gateway's namespace but is not in x-namespace-listeners"
+
+new_stacks
+share_namespace "    environment:"$'\n'"      STGUIADDRESS: 127.0.0.1:8385"$'\n' "  app:" '    "8385": gateway'
+expect "an app bound to loopback in the namespace fails" 1 "app sets STGUIADDRESS to '127.0.0.1:8385', which tailscale reaches"
+
+new_stacks
+share_namespace "    environment:"$'\n'"      - LISTEN_ADDRESS=\${LISTEN:-0.0.0.0:9100}"$'\n' "  app:" '    "9100": gateway'
+expect "an app bound to every address by a default fails" 1 "app sets LISTEN_ADDRESS to '\${LISTEN:-0.0.0.0:9100}'"
+
+new_stacks
+printf '    environment:\n      TS_OUTBOUND_HTTP_PROXY_LISTEN: ":1055"\n' >>"$demo/docker-compose.yml"
+expect "a tailscale proxy on every address fails" 1 "tailscale sets TS_OUTBOUND_HTTP_PROXY_LISTEN to ':1055'"
+expect "a tailscale listener must be declared" 1 "tailscale shares the gateway's namespace but is not in x-namespace-listeners"
+
+new_stacks
+printf '    environment:\n      TS_OUTBOUND_HTTP_PROXY_LISTEN: gateway:1055\n\nx-namespace-listeners:\n  tailscale:\n    "1055": gateway\n' >>"$demo/docker-compose.yml"
+expect "a tailscale proxy on the gateway's address passes" 0 "all 2 stacks"
+
+new_stacks
+share_namespace "" "  app:" '    "9100": tailnet'
+expect "a tailnet listener PORTS.md does not list fails" 1 "app declares 9100/tcp on the tailnet, but PORTS.md has no tailnet row for it"
+
+new_stacks
+share_namespace "" "  app:" '    "22001-22099": tailnet'
+expect "a tailnet listener serve.json does not forward fails" 1 "app declares 22001 on the tailnet, but serve.json does not forward it"
+
+new_stacks
+share_namespace "" "  app:" '    "22001-22099/udp": tailnet'
+expect "a UDP tailnet listener needs no serve.json forward" 0 "all 2 stacks"
+
+new_stacks
+share_namespace "" "  app:" '    "21027/udp": unbound'
+expect "an unbound listener passes and is named" 0 "NOTE demo: app listens on 21027/udp everywhere"
+
+new_stacks
+share_namespace "" "  app:" '    "9100": loopback'
+expect "an unknown listener kind fails" 1 "gives app:9100 the kind 'loopback'"
+
+new_stacks
+share_namespace "" "  app:" '    "9100": gateway' "  api:" '    "8080": gateway'
+expect "declaring a service outside the namespace fails" 1 "names api, which does not share the gateway's namespace"
+
+new_stacks
+share_namespace "" '  app: { "9100": gateway }'
+expect "a flow-style declaration fails by line" 1 "x-namespace-listeners has the line"
+
+new_stacks
+share_namespace "" "  app:" '    "91x": gateway'
+expect "a malformed listener port fails" 1 "gives app the port '91x'"
+
+new_stacks
+sed -i 's/reverse_proxy api:8080/reverse_proxy 127.0.0.1:8080/' "$demo/gateway/sites.caddy"
+expect "a loopback upstream in sites.caddy fails" 1 "sites.caddy proxies to a loopback upstream"
+
+new_stacks
+sed -i 's/reverse_proxy api:8080/reverse_proxy gateway:9100/' "$demo/gateway/sites.caddy"
+share_namespace "" "  app:" '    "9100": gateway'
+expect "an upstream on the gateway's address passes" 0 "all 2 stacks"
 
 new_stacks
 publish_extra "8080"

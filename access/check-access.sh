@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=${1:-$(cd "$here/../.." && pwd)}
 table=${PORTS_TABLE:-$here/PORTS.md}
 template=${GATEWAY_TEMPLATE:-$here/../gateway}
-vendored_files="Caddyfile gateway.yml gateway.sh tailscale.sh"
+vendored_files="Caddyfile gateway.yml gateway.sh namespace-address.sh tailscale.sh"
 funnel_capable_ports=" 443 8443 10000 "
 
 failures=0
@@ -91,6 +91,118 @@ check_template_binding() {
         fail gateway "workflows gateway/Caddyfile's (tailnet) snippet does not 'bind 127.0.0.1', where serve.json forwards"
     grep -qE '^[[:space:]]*entrypoint:[[:space:]]*\["/bin/sh",[[:space:]]*"/etc/caddy/gateway\.sh"\]' "$template/gateway.yml" ||
         fail gateway "workflows gateway/gateway.yml does not start the gateway through gateway.sh, which sets GATEWAY_LOCAL_ADDRESSES"
+    grep -qE '^[[:space:]]*-[[:space:]]*\./namespace-address\.sh:/etc/caddy/namespace-address\.sh:ro[[:space:]]*$' "$template/gateway.yml" ||
+        fail gateway "workflows gateway/gateway.yml does not mount namespace-address.sh, which gateway.sh reads the addresses with"
+}
+
+# "service" for every service of a compose file that joins the gateway's or tailscale's namespace.
+namespace_sharers() {
+    tr -d '\r' <"$1" | awk '
+        /^[^[:space:]#]/ { top = $0; sub(/:.*/, "", top); next }
+        top == "services" && /^  [^[:space:]#][^:]*:/ { service = substr($0, 3); sub(/:.*/, "", service); next }
+        top == "services" && /^[[:space:]]+network_mode:[[:space:]]*["\047]?service:(gateway|tailscale)["\047]?[[:space:]]*$/ { print service }
+    '
+}
+
+# "service port kind" for every entry of a compose file's x-namespace-listeners block.
+namespace_listeners() {
+    tr -d '\r' <"$1" | awk '
+        /^[^[:space:]#]/ { inside = ($0 ~ /^x-namespace-listeners:[[:space:]]*$/); next }
+        !inside || /^[[:space:]]*(#|$)/ { next }
+        /^  [^[:space:]][^:]*:[[:space:]]*$/ { service = substr($0, 3); sub(/:.*/, "", service); print service, "-", "-"; next }
+        /^    [^[:space:]]/ {
+            line = $0; gsub(/["\047[:space:]]/, "", line)
+            port = line; sub(/:.*/, "", port); kind = line; sub(/^[^:]*:/, "", kind); sub(/#.*/, "", kind)
+            print service, port, kind; next
+        }
+        { print "?", "-", $0 }
+    '
+}
+
+# "KEY=value" for every environment entry of one service whose name says it sets an address.
+listen_settings() {
+    tr -d '\r' <"$1" | awk -v wanted="$2" '
+        /^[^[:space:]#]/ { top = $0; sub(/:.*/, "", top); service = ""; next }
+        top == "services" && /^  [^[:space:]#][^:]*:/ { service = substr($0, 3); sub(/:.*/, "", service); next }
+        top != "services" || service != wanted { next }
+        {
+            line = $0; sub(/^[[:space:]]*-?[[:space:]]*/, "", line); gsub(/["\047]/, "", line)
+            if (match(line, /^[A-Z][A-Z0-9_]*(ADDRESS|ADDR|LISTEN|HOST|HOSTNAME|BIND)[A-Z0-9_]*[:=]/)) {
+                key = substr(line, 1, RLENGTH - 1); value = substr(line, RLENGTH + 1); sub(/^[[:space:]]+/, "", value)
+                print key "=" value
+            }
+        }
+    '
+}
+
+# An address on which tailscale's hand-off to 127.0.0.1 finds the listener: loopback, every
+# address, or a bare ":port".
+is_tailnet_reachable_address() {
+    local address
+    address=$(sed -E 's/\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}/\1/g' <<<"$1")
+    [[ $address =~ ^(127\.|localhost|0\.0\.0\.0|\[::1?\]|::|:[0-9]) ]]
+}
+
+# Every service in the gateway's namespace declares, in x-namespace-listeners, each port it listens
+# on: "gateway" (bound to the namespace's Docker address, which the tailnet cannot reach),
+# "tailnet" (a port PORTS.md puts on the tailnet, TCP ones forwarded in serve.json), or "unbound"
+# (the app cannot choose its address, so the port answers on the tailnet; the reason is recorded
+# beside the entry). tailscale in userspace mode hands a tailnet connection, TCP or UDP, on any port
+# serve.json does not forward to 127.0.0.1 of the namespace, so anything listening there or on every
+# address is on the tailnet.
+check_namespace_listeners() {
+    local stack=$1 repo=$2 file service port kind spec protocol number setting sharers="" declared="" entries=""
+    for file in "${compose_files[@]}"; do
+        sharers+=" $(namespace_sharers "$file" | tr '\n' ' ')"
+        entries+=$(namespace_listeners "$file")$'\n'
+    done
+    if grep -qE '^[[:space:]]+-?[[:space:]]*TS_[A-Z0-9_]*(LISTEN|ADDR_PORT|SERVER)[A-Z0-9_]*[:=]' "${compose_files[@]}"; then
+        sharers+=" tailscale"
+    fi
+    while read -r service port kind; do
+        [ -n "$service" ] || continue
+        if [ "$service" = "?" ]; then
+            fail "$stack" "x-namespace-listeners has the line '$kind'; write each service as '  <service>:' and each port as '    \"<port>[/udp]\": <kind>'"
+            continue
+        fi
+        declared+=" $service "
+        [ "$port" = - ] && continue
+        [[ " $sharers " == *" $service "* ]] ||
+            fail "$stack" "x-namespace-listeners names $service, which does not share the gateway's namespace"
+        spec=${port%/*}
+        protocol=tcp
+        [[ $port == */udp ]] && protocol=udp
+        if ! [[ $spec =~ ^[0-9]+(-[0-9]+)?$ ]] || [[ $port == */* && $port != */udp ]]; then
+            fail "$stack" "x-namespace-listeners gives $service the port '$port'; write N, N-M, N/udp or N-M/udp"
+            continue
+        fi
+        case $kind in
+            gateway) ;;
+            unbound) echo "NOTE $stack: $service listens on $port everywhere in the gateway's namespace, so the tailnet reaches it" ;;
+            tailnet)
+                for number in $(expand_ports "$spec"); do
+                    [ -n "$(kind_of "$stack" tailnet "$number")" ] ||
+                        { fail "$stack" "$service declares $number/$protocol on the tailnet, but PORTS.md has no tailnet row for it"; break; }
+                    [ "$protocol" = udp ] || [[ $serve_found == *" $number "* ]] ||
+                        { fail "$stack" "$service declares $number on the tailnet, but serve.json does not forward it"; break; }
+                done
+                ;;
+            *) fail "$stack" "x-namespace-listeners gives $service:$port the kind '$kind'; use gateway, tailnet or unbound" ;;
+        esac
+    done <<<"$entries"
+    for service in $(tr ' ' '\n' <<<"$sharers" | sort -u); do
+        [[ $declared == *" $service "* ]] ||
+            fail "$stack" "$service shares the gateway's namespace but is not in x-namespace-listeners; declare each port it listens on"
+        for file in "${compose_files[@]}"; do
+            while IFS= read -r setting; do
+                is_tailnet_reachable_address "${setting#*=}" &&
+                    fail "$stack" "$service sets ${setting%%=*} to '${setting#*=}', which tailscale reaches from the tailnet; bind the namespace's Docker address (gateway/namespace-address.sh, or the name gateway)"
+            done < <(listen_settings "$file" "$service")
+        done
+    done
+    if grep -nE '^[^#]*(reverse_proxy|to)[[:space:]]+(https?://)?(127\.|localhost|\[::1\])' "$repo/gateway/sites.caddy" >/dev/null; then
+        fail "$stack" "sites.caddy proxies to a loopback upstream, which listens where tailscale hands tailnet connections; proxy to gateway:<port> and bind the app to the namespace's Docker address"
+    fi
 }
 
 # Adds the tailnet ports a tailscale serve config forwards to serve_found, and those it forwards with a
@@ -289,6 +401,7 @@ check_gateway() {
             [[ $local_sites == *" $host "* ]] || fail "$stack" "web port $host has no http://:$host site in sites.caddy"
         fi
     done <<<"$rows"
+    check_namespace_listeners "$stack" "$repo"
 }
 
 rows=$(table_rows)
