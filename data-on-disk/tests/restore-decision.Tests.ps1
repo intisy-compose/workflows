@@ -53,12 +53,34 @@ function New-DumpFolder([object]$Case) {
     New-Item -ItemType Directory -Path $folder | Out-Null
     foreach ($dump in $Case.Dumps) { [System.IO.File]::WriteAllBytes((Join-Path $folder $dump.Name), (New-Object byte[] $dump.Bytes)) }
     foreach ($link in $Case.Links) { New-Item -ItemType SymbolicLink -Path (Join-Path $folder $link.Name) -Target (Join-Path $folder $link.Target) | Out-Null }
-    if ($Case.Folder -eq "unlistable") { icacls $folder /deny "${currentUser}:(RD)" /Q | Out-Null }
     return $folder
 }
 
-function Undo-DumpFolderDenial([object]$Case) {
-    if ($Case.Folder -eq "unlistable") { icacls (Get-DumpFolder $Case) /remove:d $currentUser /Q | Out-Null }
+<#
+.SYNOPSIS
+Makes listing a folder fail as an access-denied Get-ChildItem does, whoever runs the suite.
+.NOTES
+Must be called inside an It block. A deny ACL alone does not stop an elevated shell from listing.
+#>
+function Set-FolderUnlistable([string]$Folder) {
+    $global:unlistableFolder = $Folder
+    Mock Get-ChildItem { throw [System.UnauthorizedAccessException]"Access to the path '$LiteralPath' is denied." } -ParameterFilter { $LiteralPath -eq $global:unlistableFolder }
+}
+
+<#
+.SYNOPSIS
+True when this shell may create a symlink, which Windows allows only elevated or in Developer Mode.
+#>
+function Test-CanCreateSymlink {
+    $target = Join-Path $scratch "symlink-probe-target"
+    [System.IO.File]::WriteAllBytes($target, (New-Object byte[] 1))
+    try { New-Item -ItemType SymbolicLink -Path (Join-Path $scratch "symlink-probe") -Target $target -ErrorAction Stop | Out-Null; return $true }
+    catch { return $false }
+}
+
+function Test-ListingIsDenied([string]$Folder) {
+    try { Get-ChildItem -LiteralPath $Folder -ErrorAction Stop | Out-Null; return $false }
+    catch { return $true }
 }
 
 function New-Validator([object]$Case) {
@@ -78,16 +100,22 @@ function Invoke-DecisionCase([object]$Case) {
     $global:volumeIsEmpty = $Case.VolumeIsEmpty
     $global:volumeChecks = @()
     $global:validatorRuns = 0
-    try { return Get-RestoreDecision $volume (New-DumpFolder $Case) $Case.Pattern (New-Validator $Case) -AllowFresh $Case.AllowFresh 3>$null }
-    finally { Undo-DumpFolderDenial $Case }
+    $folder = New-DumpFolder $Case
+    if ($Case.Folder -eq "unlistable") { Set-FolderUnlistable $folder }
+    return Get-RestoreDecision $volume $folder $Case.Pattern (New-Validator $Case) -AllowFresh $Case.AllowFresh 3>$null
 }
 
 $cases = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "cases") -Filter "*.case" | Sort-Object Name | ForEach-Object { Read-DecisionCase $_ })
+$canCreateSymlink = Test-CanCreateSymlink
 
 Describe "Get-RestoreDecision over the shared cases" {
     It "finds the cases" { $cases.Count -gt 0 | Should Be $true }
     foreach ($case in $cases) {
         It $case.Name {
+            if ($case.Links.Count -gt 0 -and -not $canCreateSymlink) {
+                Set-TestInconclusive "this shell may not create symlinks (not elevated, no Developer Mode); the bash run on Linux covers the case"
+                return
+            }
             $decision = Invoke-DecisionCase $case
             ($global:volumeChecks -join ",") | Should Be $volume
             $decision.Action | Should Be $case.ExpectedAction
@@ -100,17 +128,31 @@ Describe "Get-RestoreDecision over the shared cases" {
 }
 
 Describe "Get-CompleteDumps on an unlistable folder" {
-    $unlistable = [pscustomobject]@{ Name = "unlistable-direct"; Folder = "unlistable"; Dumps = @(); Links = @() }
-    $folder = New-DumpFolder $unlistable
-    try {
-        It "throws, naming the folder, so no caller takes it for empty" {
-            { Get-CompleteDumps $folder "app-*.dump" } | Should Throw "Cannot list $folder"
-        }
-        It "throws from Get-NewestDump too" {
-            { Get-NewestDump $folder "app-*.dump" } | Should Throw "Cannot list $folder"
-        }
+    $folder = New-DumpFolder ([pscustomobject]@{ Name = "unlistable-direct"; Folder = "present"; Dumps = @(); Links = @() })
+
+    It "throws, naming the folder, so no caller takes it for empty" {
+        Set-FolderUnlistable $folder
+        { Get-CompleteDumps $folder "app-*.dump" } | Should Throw "Cannot list $folder"
     }
-    finally { Undo-DumpFolderDenial $unlistable }
+    It "throws from Get-NewestDump too" {
+        Set-FolderUnlistable $folder
+        { Get-NewestDump $folder "app-*.dump" } | Should Throw "Cannot list $folder"
+    }
+    It "refuses a folder a real deny ACL makes unlistable, where the ACL denies" {
+        $denied = Join-Path $scratch "unlistable-acl"
+        New-Item -ItemType Directory -Path $denied | Out-Null
+        [System.IO.File]::WriteAllBytes((Join-Path $denied "app-20261019-200000.dump"), (New-Object byte[] 64))
+        icacls $denied /deny "${currentUser}:(RD)" /Q | Out-Null
+        try {
+            if (-not (Test-ListingIsDenied $denied)) {
+                Set-TestInconclusive "a deny ACL does not stop $currentUser from listing (an elevated shell); the mocked cases cover the decision"
+                return
+            }
+            $global:volumeIsEmpty = $true
+            (Get-RestoreDecision $volume $denied "app-*.dump" 3>$null).Action | Should Be "Refuse"
+        }
+        finally { icacls $denied /remove:d $currentUser /Q | Out-Null }
+    }
 }
 
 Describe "Format-RestoreRefusal" {
