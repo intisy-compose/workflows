@@ -1,9 +1,9 @@
 #!/bin/bash
 # check-cli.sh [compose root]: every <thing>-compose stack with a docker-compose.sh keeps it in step
 # with its docker-compose.ps1 and commits it so Linux can run it. Static parsing only, no script runs:
-#   - the commands of the ps1's usage table ($usage, or storage's $commands; each key's first word,
-#     less "(no args)" and "<...>" placeholders) equal the arms of the sh's
-#     last top-level `case` (each alternative of `a | b)` counts, `*)` does not) less the sh's
+#   - the commands of the ps1's usage table ($usage, or storage's $commands, [ordered] or not; each
+#     key's first word, less "(no args)" and "<...>" placeholders) equal the arms of the sh's last
+#     top-level `case` (each alternative of `a | b)` counts, `*)` does not) less the sh's
 #     `windows_only=(...)` line, which every sh declares, empty or not;
 #   - every arm starts a line of the sh's `usage()` text;
 #   - no committed .sh, nor docker-compose.sh or scripts/*.sh, holds a CR byte;
@@ -23,7 +23,7 @@ fail() { echo "FAIL $1: $2"; failures=$((failures + 1)); }
 # command; "(no args)" and a "<game>..." placeholder name the default, which is the sh's `*)` arm.
 ps1_commands() {
     tr -d '\r' <"$1" | awk '
-        /^\$(usage|commands)[[:space:]]*=[[:space:]]*@\{/ { inside = 1; next }
+        /^\$(usage|commands)[[:space:]]*=[[:space:]]*(\[ordered\])?@\{/ { inside = 1; next }
         inside && /^\}/ { exit }
         inside && /^[[:space:]]*"[^"]+"[[:space:]]*=/ {
             key = $0; sub(/^[[:space:]]*"/, "", key); sub(/".*/, "", key)
@@ -33,8 +33,10 @@ ps1_commands() {
         }'
 }
 
+# has_usage_table FILE: grep reads to the end, as `grep -q` stopping at an early table would end tr
+# with SIGPIPE, which pipefail turns into "no table".
 # shellcheck disable=SC2016 # a literal $ in the pattern
-has_usage_table() { tr -d '\r' <"$1" | grep -qE '^\$(usage|commands)[[:space:]]*=[[:space:]]*@\{'; }
+has_usage_table() { tr -d '\r' <"$1" | grep -E '^\$(usage|commands)[[:space:]]*=[[:space:]]*(\[ordered\])?@\{' >/dev/null; }
 
 # sh_arms FILE: every alternative of every arm of the last top-level case, at the indent of its first arm.
 sh_arms() {

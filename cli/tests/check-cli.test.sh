@@ -146,7 +146,7 @@ expect "storage's \$commands table is read like \$usage" 0 "all 1 stacks"
 new_stack
 printf '%s\n' \
     'param([string]$Command = "")' \
-    '$usage = @{' \
+    '$usage = [ordered]@{' \
     '    "(no args)"     = "create every container stopped, start the tunnel and sync"' \
     '    "<game>..."     = "the same, then start the named games"' \
     '    "down"          = "Stop everything"' \
@@ -172,7 +172,7 @@ printf '%s\n' \
     '    *) start_games "$@" ;;' \
     'esac' >"$demo/docker-compose.sh"
 stage
-expect "game's usage keys compare by their first word" 0 "all 1 stacks"
+expect "game's ordered usage keys compare by their first word" 0 "all 1 stacks"
 
 new_stack
 replace_in "$demo/docker-compose.ps1" '    "logs"        = "[service]  follow logs"' '    "logs [service]" = "follow logs"'
@@ -184,6 +184,11 @@ new_stack
 printf 'param([string]$Command = "up")\nWrite-Host "Usage: up | down"\n' >"$demo/docker-compose.ps1"
 stage
 expect "a ps1 without a usage table fails" 1 "FAIL demo: docker-compose.ps1 has no \$usage table"
+
+new_stack
+for _ in $(seq 20000); do echo '# a long body after the table, as game has'; done >>"$demo/docker-compose.ps1"
+stage
+expect "a usage table far above the end of a long ps1 is found" 0 "all 1 stacks"
 
 new_stack
 rm "$demo/docker-compose.ps1"
