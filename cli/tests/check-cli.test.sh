@@ -19,7 +19,7 @@ expect() {
         echo "ok   $name"
     else
         echo "FAIL $name: exit $status, wanted $want_status containing '$want_text'"
-        sed 's/^/     /' <<<"$output"
+        printf '     %s\n' "${output//$'\n'/$'\n'     }"
         failures=$((failures + 1))
     fi
 }
