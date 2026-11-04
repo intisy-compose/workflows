@@ -41,6 +41,11 @@ jobs:
       - name: Check the Linux CLI has the Windows CLI's commands
         run: bash workflows/cli/check-cli.sh stacks
 
+      - name: Install the pinned shellcheck
+        run: |
+          bash workflows/cli/install-shellcheck.sh "$RUNNER_TEMP/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
+
       - name: Check the stack's shell scripts under shellcheck
         run: bash workflows/cli/check-shell.sh stacks
 

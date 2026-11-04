@@ -24,6 +24,11 @@ jobs:
       - name: CLI parity check
         run: bash cli/tests/check-cli.test.sh
 
+      - name: Install the pinned shellcheck
+        run: |
+          bash cli/install-shellcheck.sh "$RUNNER_TEMP/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck" >> "$GITHUB_PATH"
+
       - name: Shellcheck check
         run: bash cli/tests/check-shell.test.sh
 
@@ -34,7 +39,7 @@ jobs:
         run: >-
           shellcheck -x
           cli/check-cli.sh cli/tests/check-cli.test.sh
-          cli/check-shell.sh cli/tests/check-shell.test.sh
+          cli/check-shell.sh cli/tests/check-shell.test.sh cli/install-shellcheck.sh
           data-on-disk/data-on-disk.sh data-on-disk/check-volumes.sh
           data-on-disk/tests/check-volumes.test.sh data-on-disk/tests/restore-decision.test.sh
 
