@@ -26,18 +26,36 @@ database_volume_is_empty() {
 }
 
 # complete_dumps FOLDER PATTERN: the name of every complete dump in a folder, newest first, one per
-# line. Dumps are named with a sortable timestamp, so name order is age order. A zero-byte file or a
-# .tmp is an interrupted dump and is never listed.
-complete_dumps() {
-    local folder=$1 pattern=$2
-    [ -d "$folder" ] || return 0
-    find "$folder" -mindepth 1 -maxdepth 1 -type f -name "$pattern" ! -name "*.tmp" -size +0c -printf '%f\n' | LC_ALL=C sort -r
-}
+# line. Only names of the form <app>-YYYYMMDD-HHMMSS.dump are supported: their name order, ignoring
+# case, is their age order, and PATTERN matches ignoring case, as on Windows. A zero-byte file or a
+# .tmp is an interrupted dump and is never listed; a symlink counts with the size of its target.
+# A folder that exists but cannot be listed fails with a message naming it, so no caller takes it
+# for an empty one.
+complete_dumps() (
+    folder=$1 pattern=$2
+    [ -d "$folder" ] || exit 0
+    if ! listing=$(find "$folder/." ! -name . -prune); then
+        echo "Cannot list $folder" >&2
+        exit 1
+    fi
+    shopt -s nocasematch
+    while IFS= read -r path; do
+        name=${path##*/}
+        # shellcheck disable=SC2053 # PATTERN is a glob on purpose
+        if [ -n "$path" ] && [[ $name == $pattern ]] && [[ $name != *.tmp ]] && dump_has_bytes "$path"; then
+            printf '%s\n' "$name"
+        fi
+    done <<<"$listing" | LC_ALL=C sort -r -f
+)
 
-# newest_dump FOLDER PATTERN: the name of the newest complete dump in a folder, or nothing.
+# dump_has_bytes PATH: true when a file, or the file a symlink points to, is not empty.
+dump_has_bytes() { [ -f "$1" ] && [ -s "$1" ]; }
+
+# newest_dump FOLDER PATTERN: the name of the newest complete dump in a folder, or nothing; fails as
+# complete_dumps does on a folder that cannot be listed.
 newest_dump() {
     local dumps
-    dumps=$(complete_dumps "$1" "$2")
+    dumps=$(complete_dumps "$1" "$2") || return 1
     if [ -n "$dumps" ]; then printf '%s\n' "${dumps%%$'\n'*}"; fi
 }
 
@@ -59,17 +77,23 @@ table_row_counts() {
 # restore_decision VOLUME FOLDER PATTERN [REJECT_FUNCTION] [ALLOW_FRESH]: what `up` does with the
 # database volume, as lines: "action Keep|Restore|Fresh|Refuse", then "dump NAME" for Restore, then
 # "rejected NAME<TAB>REASON" for each newer dump that was skipped.
-# Refuse answers an empty volume next to complete dumps that REJECT_FUNCTION all rejects: an empty
-# database started there would be dumped hourly and rotate those dumps out within BACKUP_KEEP hours.
+# Refuse answers an empty volume next to complete dumps that REJECT_FUNCTION all rejects, or next to
+# a folder that cannot be listed (rejected under the folder's own path): an empty database started
+# there would be dumped hourly and rotate those dumps out within BACKUP_KEEP hours.
 # REJECT_FUNCTION is called with a dump's path and prints why it cannot be restored, or nothing when
 # it can; its exit code is ignored and its lines join with spaces, as the ps1's "$(...)" does.
 # ALLOW_FRESH=true starts an empty database instead of restoring, but never touches a volume that holds one.
 restore_decision() {
     local volume=$1 folder=$2 pattern=$3 reject_function=${4:-} allow_fresh=${5:-false}
-    local name reason rejected=()
+    local name reason listing rejected=()
     if ! database_volume_is_empty "$volume"; then new_restore_decision Keep ""; return 0; fi
     if [ "$allow_fresh" = true ]; then new_restore_decision Fresh ""; return 0; fi
+    if ! listing=$(complete_dumps "$folder" "$pattern"); then
+        new_restore_decision Refuse "" "$folder"$'\t'"it cannot be listed"
+        return 0
+    fi
     while IFS= read -r name <&3; do
+        [ -n "$name" ] || continue
         reason=""
         if [ -n "$reject_function" ]; then reason=$("$reject_function" "$folder/$name" </dev/null) || true; fi
         reason=${reason//$'\n'/ }
@@ -78,7 +102,7 @@ restore_decision() {
             return 0
         fi
         rejected+=("$name"$'\t'"$reason")
-    done 3< <(complete_dumps "$folder" "$pattern")
+    done 3<<<"$listing"
     if [ ${#rejected[@]} -gt 0 ]; then
         new_restore_decision Refuse "" "${rejected[@]}"
         return 0

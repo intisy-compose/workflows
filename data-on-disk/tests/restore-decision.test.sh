@@ -5,15 +5,16 @@
 #
 # A case file holds one "key value" line each ('#' starts a comment):
 #   volume empty|cluster          what the shadowed probe answers (default empty)
-#   folder present|missing        whether the dump folder exists (default present)
+#   folder present|missing|unlistable   whether the dump folder exists, and can be listed (default present)
 #   pattern GLOB                  the dump pattern (default app-*.dump)
 #   dump NAME BYTES               a file in the folder
+#   link NAME TARGET              a symlink in the folder to the file TARGET beside it
 #   validator none                pass no rejection callback (default: one built from the reject lines)
 #   reject NAME|* REASON          what the callback answers for that dump; any other dump is restorable
 #   fresh true|false              allow-fresh (default false)
 #   expect-action ACTION          Keep, Restore, Fresh or Refuse
 #   expect-dump NAME              the dump to restore (default none)
-#   expect-rejected NAME REASON   one line per rejected dump, in order
+#   expect-rejected NAME REASON   one line per rejected dump, in order; {folder} stands for the folder's path
 #   expect-validator-runs N       how often the callback ran (default unchecked)
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -58,16 +59,30 @@ check() {
 
 lines_with() { sed -n "s/^$1 //p" <<<"$2"; }
 
+# make_unlistable FOLDER: takes the read bit away; where that does not stop a listing (root, or Git
+# Bash on Windows), find is shadowed to fail as it does on a folder it cannot read.
+make_unlistable() {
+    chmod 000 "$1"
+    if ls "$1" >/dev/null 2>&1; then
+        find() { echo "find: '$1': Permission denied" >&2; return 1; }
+    fi
+}
+
+undo_unlistable() {
+    chmod 755 "$1"
+    unset -f find
+}
+
 run_case() {
     local file=$1 name key value folder pattern="app-*.dump" fresh=false validator=case_rejection
-    local folder_missing=false want_action="" want_dump="" want_rejected="" want_runs="" decision line
+    local folder_state=present want_action="" want_dump="" want_rejected="" want_runs="" decision line
     name=$(basename "$file" .case)
     folder="$scratch/$name"
     volume_is_empty=true
     case_rejections=()
     : >"$probe_log"
     : >"$validator_log"
-    local dump_specs=()
+    local dump_specs=() link_specs=()
     while IFS= read -r line || [ -n "$line" ]; do
         line=${line%$'\r'}
         if [ -z "$line" ] || [[ $line == \#* ]]; then continue; fi
@@ -75,9 +90,10 @@ run_case() {
         value=${line#* }
         case $key in
             volume) if [ "$value" = empty ]; then volume_is_empty=true; else volume_is_empty=false; fi ;;
-            folder) [ "$value" = missing ] && folder_missing=true ;;
+            folder) folder_state=$value ;;
             pattern) pattern=$value ;;
             dump) dump_specs+=("$value") ;;
+            link) link_specs+=("$value") ;;
             validator) [ "$value" = none ] && validator="" ;;
             reject) case_rejections+=("${value%% *}"$'\t'"${value#* }") ;;
             fresh) fresh=$value ;;
@@ -89,13 +105,17 @@ run_case() {
         esac
     done <"$file"
 
-    if [ "$folder_missing" = false ]; then
+    if [ "$folder_state" != missing ]; then
         mkdir -p "$folder"
-        local dump
+        local dump link
         for dump in "${dump_specs[@]}"; do head -c "${dump#* }" /dev/zero >"$folder/${dump%% *}"; done
+        for link in "${link_specs[@]}"; do ln -s "${link#* }" "$folder/${link%% *}"; done
     fi
+    want_rejected=${want_rejected//\{folder\}/$folder}
 
-    decision=$(restore_decision "$volume" "$folder" "$pattern" "$validator" "$fresh")
+    if [ "$folder_state" = unlistable ]; then make_unlistable "$folder"; fi
+    decision=$(restore_decision "$volume" "$folder" "$pattern" "$validator" "$fresh" 2>"$scratch/stderr")
+    if [ "$folder_state" = unlistable ]; then undo_unlistable "$folder"; fi
     check "$name: probed volume" "$volume" "$(cat "$probe_log")" &&
         check "$name: action" "$want_action" "$(lines_with action "$decision")" &&
         check "$name: dump" "$want_dump" "$(lines_with dump "$decision")" &&
@@ -146,6 +166,13 @@ check "newest_dump takes the newest complete dump" "app-20261019-200000.dump" "$
 check "newest_dump is empty for an empty folder" "" "$(newest_dump "$scratch/empty" "app-*.dump")" &&
     echo "ok   newest_dump is empty for an empty folder"
 expect_true "newest_dump succeeds on a missing folder" newest_dump "$scratch/missing" "app-*.dump"
+
+make_unlistable "$dumps"
+expect_false "complete_dumps fails on an unlistable folder" complete_dumps "$dumps" "app-*.dump"
+expect_false "newest_dump fails on an unlistable folder" newest_dump "$dumps" "app-*.dump"
+check "the failure names the folder" "Cannot list $dumps" "$(complete_dumps "$dumps" "app-*.dump" 2>&1 >/dev/null | tail -n 1)" &&
+    echo "ok   the failure names the folder"
+undo_unlistable "$dumps"
 
 check "a decision prints its action, its dump, then each rejection" \
     "action Restore"$'\n'"dump b.dump"$'\n'"rejected c.dump"$'\t'"why" "$(new_restore_decision Restore b.dump "c.dump"$'\t'"why")" &&

@@ -1,0 +1,6 @@
+volume empty
+folder unlistable
+dump app-20261019-200000.dump 64
+fresh true
+expect-action Fresh
+expect-validator-runs 0

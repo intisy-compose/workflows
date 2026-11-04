@@ -1,0 +1,8 @@
+# A symlink counts with the size of the file it points to.
+volume empty
+dump real-20261019-190000.bin 64
+link app-20261019-200000.dump real-20261019-190000.bin
+dump app-20261019-190000.dump 64
+expect-action Restore
+expect-dump app-20261019-200000.dump
+expect-validator-runs 1

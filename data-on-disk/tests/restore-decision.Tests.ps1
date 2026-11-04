@@ -17,8 +17,8 @@ New-Item -ItemType Directory -Path $scratch | Out-Null
 
 function Read-DecisionCase([System.IO.FileInfo]$File) {
     $case = [pscustomobject]@{
-        Name = $File.BaseName; VolumeIsEmpty = $true; FolderMissing = $false; Pattern = "app-*.dump"
-        Dumps = @(); HasValidator = $true; Rejections = @(); AllowFresh = $false
+        Name = $File.BaseName; VolumeIsEmpty = $true; Folder = "present"; Pattern = "app-*.dump"
+        Dumps = @(); Links = @(); HasValidator = $true; Rejections = @(); AllowFresh = $false
         ExpectedAction = $null; ExpectedDump = $null; ExpectedRejected = @(); ExpectedValidatorRuns = $null
     }
     foreach ($line in [System.IO.File]::ReadAllLines($File.FullName)) {
@@ -26,9 +26,10 @@ function Read-DecisionCase([System.IO.FileInfo]$File) {
         $key, $value = $line -split " ", 2
         switch ($key) {
             "volume" { $case.VolumeIsEmpty = ($value -eq "empty") }
-            "folder" { $case.FolderMissing = ($value -eq "missing") }
+            "folder" { $case.Folder = $value }
             "pattern" { $case.Pattern = $value }
             "dump" { $name, $bytes = $value -split " ", 2; $case.Dumps += [pscustomobject]@{ Name = $name; Bytes = [int]$bytes } }
+            "link" { $name, $target = $value -split " ", 2; $case.Links += [pscustomobject]@{ Name = $name; Target = $target } }
             "validator" { $case.HasValidator = ($value -ne "none") }
             "reject" { $name, $reason = $value -split " ", 2; $case.Rejections += [pscustomobject]@{ Name = $name; Reason = $reason } }
             "fresh" { $case.AllowFresh = ($value -eq "true") }
@@ -42,12 +43,22 @@ function Read-DecisionCase([System.IO.FileInfo]$File) {
     return $case
 }
 
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+function Get-DumpFolder([object]$Case) { return Join-Path $scratch $Case.Name }
+
 function New-DumpFolder([object]$Case) {
-    $folder = Join-Path $scratch $Case.Name
-    if ($Case.FolderMissing) { return $folder }
+    $folder = Get-DumpFolder $Case
+    if ($Case.Folder -eq "missing") { return $folder }
     New-Item -ItemType Directory -Path $folder | Out-Null
     foreach ($dump in $Case.Dumps) { [System.IO.File]::WriteAllBytes((Join-Path $folder $dump.Name), (New-Object byte[] $dump.Bytes)) }
+    foreach ($link in $Case.Links) { New-Item -ItemType SymbolicLink -Path (Join-Path $folder $link.Name) -Target (Join-Path $folder $link.Target) | Out-Null }
+    if ($Case.Folder -eq "unlistable") { icacls $folder /deny "${currentUser}:(RD)" /Q | Out-Null }
     return $folder
+}
+
+function Undo-DumpFolderDenial([object]$Case) {
+    if ($Case.Folder -eq "unlistable") { icacls (Get-DumpFolder $Case) /remove:d $currentUser /Q | Out-Null }
 }
 
 function New-Validator([object]$Case) {
@@ -67,7 +78,8 @@ function Invoke-DecisionCase([object]$Case) {
     $global:volumeIsEmpty = $Case.VolumeIsEmpty
     $global:volumeChecks = @()
     $global:validatorRuns = 0
-    return Get-RestoreDecision $volume (New-DumpFolder $Case) $Case.Pattern (New-Validator $Case) -AllowFresh $Case.AllowFresh
+    try { return Get-RestoreDecision $volume (New-DumpFolder $Case) $Case.Pattern (New-Validator $Case) -AllowFresh $Case.AllowFresh 3>$null }
+    finally { Undo-DumpFolderDenial $Case }
 }
 
 $cases = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "cases") -Filter "*.case" | Sort-Object Name | ForEach-Object { Read-DecisionCase $_ })
@@ -80,10 +92,25 @@ Describe "Get-RestoreDecision over the shared cases" {
             ($global:volumeChecks -join ",") | Should Be $volume
             $decision.Action | Should Be $case.ExpectedAction
             if ($case.ExpectedDump) { $decision.Dump.Name | Should Be $case.ExpectedDump } else { $decision.Dump | Should Be $null }
-            (@($decision.Rejected | ForEach-Object { "$($_.Name)`t$($_.Reason)" }) -join "`n") | Should Be ($case.ExpectedRejected -join "`n")
+            $expectedRejected = ($case.ExpectedRejected -join "`n").Replace("{folder}", (Get-DumpFolder $case))
+            (@($decision.Rejected | ForEach-Object { "$($_.Name)`t$($_.Reason)" }) -join "`n") | Should Be $expectedRejected
             if ($null -ne $case.ExpectedValidatorRuns) { $global:validatorRuns | Should Be $case.ExpectedValidatorRuns }
         }
     }
+}
+
+Describe "Get-CompleteDumps on an unlistable folder" {
+    $unlistable = [pscustomobject]@{ Name = "unlistable-direct"; Folder = "unlistable"; Dumps = @(); Links = @() }
+    $folder = New-DumpFolder $unlistable
+    try {
+        It "throws, naming the folder, so no caller takes it for empty" {
+            { Get-CompleteDumps $folder "app-*.dump" } | Should Throw "Cannot list $folder"
+        }
+        It "throws from Get-NewestDump too" {
+            { Get-NewestDump $folder "app-*.dump" } | Should Throw "Cannot list $folder"
+        }
+    }
+    finally { Undo-DumpFolderDenial $unlistable }
 }
 
 Describe "Format-RestoreRefusal" {

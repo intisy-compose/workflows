@@ -1,0 +1,7 @@
+# A folder that exists but cannot be listed may hold dumps, so an empty database is never started there.
+volume empty
+folder unlistable
+dump app-20261019-200000.dump 64
+expect-action Refuse
+expect-rejected {folder} it cannot be listed
+expect-validator-runs 0

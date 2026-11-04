@@ -1,0 +1,8 @@
+# The pattern and the order ignore case, as on Windows, so the timestamp alone decides.
+volume empty
+dump App-20261019-200000.dump 64
+dump app-20261019-190000.dump 64
+dump APP-20261019-180000.dump 64
+expect-action Restore
+expect-dump App-20261019-200000.dump
+expect-validator-runs 1
