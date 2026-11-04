@@ -1,7 +1,8 @@
 #!/bin/bash
 # check-cli.sh [compose root]: every <thing>-compose stack with a docker-compose.sh keeps it in step
 # with its docker-compose.ps1 and commits it so Linux can run it. Static parsing only, no script runs:
-#   - the keys of the ps1's usage table ($usage, or storage's $commands) equal the arms of the sh's
+#   - the commands of the ps1's usage table ($usage, or storage's $commands; each key's first word,
+#     less "(no args)" and "<...>" placeholders) equal the arms of the sh's
 #     last top-level `case` (each alternative of `a | b)` counts, `*)` does not) less the sh's
 #     `windows_only=(...)` line, which every sh declares, empty or not;
 #   - every arm starts a line of the sh's `usage()` text;
@@ -17,12 +18,19 @@ stacks=0
 checked=0
 fail() { echo "FAIL $1: $2"; failures=$((failures + 1)); }
 
-# ps1_commands FILE: the keys of the usage hashtable, one per line.
+# ps1_commands FILE: the command of each key of the usage hashtable, one per line, each once. A key
+# may carry its arguments ("console [name]", "data use <slot>"), so only its first word is the
+# command; "(no args)" and a "<game>..." placeholder name the default, which is the sh's `*)` arm.
 ps1_commands() {
     tr -d '\r' <"$1" | awk '
         /^\$(usage|commands)[[:space:]]*=[[:space:]]*@\{/ { inside = 1; next }
         inside && /^\}/ { exit }
-        inside && /^[[:space:]]*"[^"]+"[[:space:]]*=/ { line = $0; sub(/^[[:space:]]*"/, "", line); sub(/".*/, "", line); print line }'
+        inside && /^[[:space:]]*"[^"]+"[[:space:]]*=/ {
+            key = $0; sub(/^[[:space:]]*"/, "", key); sub(/".*/, "", key)
+            if (key == "(no args)" || key ~ /^</) next
+            sub(/[[:space:]].*/, "", key)
+            if (!(key in seen)) { seen[key] = 1; print key }
+        }'
 }
 
 # shellcheck disable=SC2016 # a literal $ in the pattern

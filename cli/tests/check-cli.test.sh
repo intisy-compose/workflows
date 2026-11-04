@@ -144,6 +144,43 @@ replace_in "$demo/docker-compose.ps1" 'Show-Usage -Commands $usage' 'Show-Usage 
 expect "storage's \$commands table is read like \$usage" 0 "all 1 stacks"
 
 new_stack
+printf '%s\n' \
+    'param([string]$Command = "")' \
+    '$usage = @{' \
+    '    "(no args)"     = "create every container stopped, start the tunnel and sync"' \
+    '    "<game>..."     = "the same, then start the named games"' \
+    '    "down"          = "Stop everything"' \
+    '    "console [name]" = "attach to a server console"' \
+    '    "data list"     = "list the data slots"' \
+    '    "data status"   = "show each slot"' \
+    '    "data use <slot> [owner/repo[@ref]]" = "point a slot at a data repo"' \
+    '}' >"$demo/docker-compose.ps1"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'windows_only=()' \
+    'usage() {' \
+    "    cat <<'EOF'" \
+    '  down     Stop everything' \
+    '  console  [name]  attach to a server console' \
+    '  data     list | status | use <slot> [owner/repo[@ref]]' \
+    'EOF' \
+    '}' \
+    'case "${1:-}" in' \
+    '    down) stop_all ;;' \
+    '    console) enter_console "$@" ;;' \
+    '    data) data_command "$@" ;;' \
+    '    *) start_games "$@" ;;' \
+    'esac' >"$demo/docker-compose.sh"
+stage
+expect "game's usage keys compare by their first word" 0 "all 1 stacks"
+
+new_stack
+replace_in "$demo/docker-compose.ps1" '    "logs"        = "[service]  follow logs"' '    "logs [service]" = "follow logs"'
+expect "a key with arguments still needs its arm" 0 "all 1 stacks"
+replace_in "$demo/docker-compose.sh" '    logs)        docker compose logs -f "$@" ;;' ''
+expect "a key with arguments without its arm fails by its first word" 1 "docker-compose.ps1 has 'logs', which docker-compose.sh neither dispatches"
+
+new_stack
 printf 'param([string]$Command = "up")\nWrite-Host "Usage: up | down"\n' >"$demo/docker-compose.ps1"
 stage
 expect "a ps1 without a usage table fails" 1 "FAIL demo: docker-compose.ps1 has no \$usage table"
