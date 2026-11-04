@@ -10,7 +10,7 @@ that `uses:` a workflow here; anything shared with other organisations lives in
 
 | workflow | what it checks or does |
 | --- | --- |
-| `check-access.yml` | every port the calling stack publishes or exposes on the tailnet is in [`access/PORTS.md`](access/PORTS.md) and listens only where its kind (`web`, `api`, `protocol`, `public`) allows, the stack's gateway is the shared one in [`gateway/`](gateway), its project, container and volume names follow the org's rules, its `docker-compose.sh` has the commands of its `docker-compose.ps1` less those it declares `windows_only` ([`cli/check-cli.sh`](cli/check-cli.sh)) and is committed LF and executable, its `docker-compose.sh`, `scripts/*.sh`, `tests/cli/*.sh` and `tests/cli/fakes/*` are clean under `shellcheck -x` of the version pinned in [`cli/shellcheck.pin`](cli/shellcheck.pin) ([`cli/check-shell.sh`](cli/check-shell.sh); [`cli/install-shellcheck.sh`](cli/install-shellcheck.sh) installs it), and its `tests/cli/run.sh` passes when it has one |
+| `check-access.yml` | every port the calling stack publishes or exposes on the tailnet is in [`access/PORTS.md`](access/PORTS.md) and listens only where its kind (`web`, `api`, `protocol`, `public`) allows, the stack's gateway is the shared one in [`gateway/`](gateway) and every service in its namespace declares where it listens, its project, container and volume names follow the org's rules, its `docker-compose.sh` has the commands of its `docker-compose.ps1` less those it declares `windows_only` ([`cli/check-cli.sh`](cli/check-cli.sh)) and is committed LF and executable, its `docker-compose.sh`, `scripts/*.sh`, `tests/cli/*.sh` and `tests/cli/fakes/*` are clean under `shellcheck -x` of the version pinned in [`cli/shellcheck.pin`](cli/shellcheck.pin) ([`cli/check-shell.sh`](cli/check-shell.sh); [`cli/install-shellcheck.sh`](cli/install-shellcheck.sh) installs it), and its `tests/cli/run.sh` passes when it has one |
 | `self-test.yml` | this repository's own suites, called by `test.yml` on every push: each check's fixture test, and the data-on-disk helper's bash twin and Pester suite over the same cases |
 
 ## The data-on-disk helper
@@ -28,13 +28,26 @@ bash twin, for `docker-compose.sh`. A stack vendors them byte for byte as
 [`gateway/`](gateway) holds the gateway every stack with a web UI or a tailnet port uses: Caddy owns
 the network namespace and serves each UI on the tailnet name, with certificates only from the
 Tailscale socket, and on a `http://:<port>` site published on `127.0.0.1`; the tailscale sidecar
-joins Caddy's namespace. A stack copies `Caddyfile` and `gateway.yml` into its own `gateway/` folder
-byte for byte, extends both services from its compose file, and adds only its own values:
+joins Caddy's namespace. A stack copies `Caddyfile`, `gateway.yml`, `gateway.sh`,
+`namespace-address.sh` and `tailscale.sh` into its own `gateway/` folder byte for byte, extends both
+services from its compose file, and adds only its own values:
 `gateway/sites.caddy` (its sites, each tailnet site with `import tailnet`), `gateway/serve.json`
 (the tailnet ports, each a `TCPForward` to the same port on `127.0.0.1`), container names,
 `TAILNET_HOST`, `TS_HOSTNAME` and the gateway's loopback ports. A change to the template is copied
-into every stack in the same step (`Caddyfile`, `gateway.yml` and `tailscale.sh`); the check fails
-on any copy that differs.
+into every stack in the same step; the check fails on any copy that differs.
+
+**Nothing in the namespace listens on `127.0.0.1` or every address**, except a tailnet port. The
+tailscale sidecar runs in userspace mode and hands every tailnet connection, TCP or UDP, on a port
+`serve.json` does not forward to `127.0.0.1:<port>` of the namespace, so a listener there answers on
+the tailnet. Caddy's local sites bind the namespace's Docker address (`gateway.sh`), and so does
+every app that shares the namespace: it reads the address with `namespace-address.sh --single`
+(mounted from `gateway/`), and the gateway proxies to it as `gateway:<port>`, which Docker resolves
+to the same address. The stack lists each such service's ports under a top-level
+`x-namespace-listeners` block, as `gateway` (bound to that address), `tailnet` (a tailnet port in
+`access/PORTS.md`, forwarded in `serve.json` when TCP) or `unbound` (the app cannot choose its
+address; the reason sits beside the entry, and the check prints a note), and the check fails on an
+undeclared service, an address setting on loopback or every address, and a loopback upstream in
+`sites.caddy`.
 
 **Public access** is one switch, the same in every stack: `PUBLIC_ACCESS=true` in the stack's
 `config.env` (default `false`, and anything but `true`, `1`, `yes` or `on` counts as off) makes
