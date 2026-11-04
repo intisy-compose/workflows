@@ -84,10 +84,12 @@ usage_words() {
         inside && /^[[:space:]]+[^[:space:]]/ { print $1 }'
 }
 
+# contains WORD WORDS...: grep reads every word, as `grep -q` stopping early could end printf with
+# SIGPIPE under pipefail.
 contains() {
     local word=$1
     shift
-    printf '%s\n' "$@" | grep -qxF -- "$word"
+    printf '%s\n' "$@" | grep -xF -- "$word" >/dev/null
 }
 
 check_commands() {
