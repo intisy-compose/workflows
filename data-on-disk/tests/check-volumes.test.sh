@@ -4,6 +4,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 check="$here/../check-volumes.sh"
 shared="$here/../data-on-disk.ps1"
+shared_sh="$here/../data-on-disk.sh"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
@@ -53,6 +54,45 @@ new_stack
 printf 'x-volume-roles:\n  demo-db: dumped\n  demo-cache: rebuilt\n  demo-state: self-restored\nvolumes:\n  demo-db:\n  demo-cache:\n  demo-state:\n' >"$scratch/demo-compose/docker-compose.yml"
 cp "$shared" "$scratch/demo-compose/scripts/data-on-disk.ps1"
 expect "complete stack passes" 0 "all 1 stacks"
+
+dumped_stack() {
+    new_stack
+    printf 'x-volume-roles:\n  demo-db: dumped\nvolumes:\n  demo-db:\n' >"$scratch/demo-compose/docker-compose.yml"
+    cp "$shared" "$scratch/demo-compose/scripts/data-on-disk.ps1"
+}
+
+dumped_stack
+touch "$scratch/demo-compose/docker-compose.sh"
+expect "a Linux CLI next to the ps1 helper needs the bash helper" 1 "FAIL demo: has a docker-compose.sh but no scripts/data-on-disk.sh"
+
+dumped_stack
+touch "$scratch/demo-compose/docker-compose.sh"
+echo "# drifted" >"$scratch/demo-compose/scripts/data-on-disk.sh"
+expect "differing bash helper copy fails" 1 "scripts/data-on-disk.sh differs from data-on-disk/data-on-disk.sh"
+
+new_stack
+printf 'x-volume-roles:\n  demo-db: rebuilt\nvolumes:\n  demo-db:\n' >"$scratch/demo-compose/docker-compose.yml"
+echo "# drifted" >"$scratch/demo-compose/scripts/data-on-disk.sh"
+expect "differing bash helper copy fails without a Linux CLI too" 1 "scripts/data-on-disk.sh differs"
+
+new_stack
+printf 'x-volume-roles:\n  demo-state: self-restored\nvolumes:\n  demo-state:\n' >"$scratch/demo-compose/docker-compose.yml"
+cp "$shared" "$scratch/demo-compose/scripts/data-on-disk.ps1"
+touch "$scratch/demo-compose/docker-compose.sh"
+expect "a stack that vendors only the ps1 helper needs the bash one with a Linux CLI" 1 "has a docker-compose.sh but no scripts/data-on-disk.sh"
+
+dumped_stack
+expect "a stack without a Linux CLI needs no bash helper" 0 "all 1 stacks"
+
+dumped_stack
+touch "$scratch/demo-compose/docker-compose.sh"
+cp "$shared_sh" "$scratch/demo-compose/scripts/data-on-disk.sh"
+expect "a Linux CLI with both helpers passes" 0 "all 1 stacks"
+
+new_stack
+printf 'x-volume-roles:\n  demo-cache: rebuilt\nvolumes:\n  demo-cache:\n' >"$scratch/demo-compose/docker-compose.yml"
+touch "$scratch/demo-compose/docker-compose.sh"
+expect "a Linux CLI without a database needs no helper" 0 "all 1 stacks"
 
 new_stack
 printf 'x-volume-roles:\n  demo-db: rebuilt\nvolumes:\n  demo-db:\n' >"$scratch/demo-compose/docker-compose.base.yml"

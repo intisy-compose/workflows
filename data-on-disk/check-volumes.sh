@@ -1,21 +1,23 @@
 #!/bin/bash
 # check-volumes.sh [compose root]: every named volume of every <thing>-compose stack declares its role
 # (rebuilt | dumped | self-restored) under the top-level x-volume-roles, and every vendored
-# scripts/data-on-disk.ps1 is byte-identical to the shared one. Exits non-zero and names each violation.
+# scripts/data-on-disk.ps1 and scripts/data-on-disk.sh is byte-identical to the shared one. A stack
+# with a dumped volume vendors the ps1; one that also has a docker-compose.sh and vendors the ps1
+# vendors the sh too. Exits non-zero and names each violation.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=${1:-$(cd "$here/../.." && pwd)}
 shared="$here/data-on-disk.ps1"
+shared_sh="$here/data-on-disk.sh"
 
 failures=0
 checked=0
 fail() { echo "FAIL $1: $2"; failures=$((failures + 1)); }
 
-# Prints "name value" for each entry at two-space indent under the top-level key $1.
+# block_entries KEY FILE: prints "name value" for each entry at two-space indent under the top-level KEY.
 block_entries() {
-    local key=$1
-    shift
-    tr -d '\r' <"$@" | awk -v key="$key" '
+    local key=$1 file=$2
+    tr -d '\r' <"$file" | awk -v key="$key" '
         /^[^[:space:]#]/ { inside = ($0 == key ":"); next }
         inside && /^  [^[:space:]#]/ {
             line = substr($0, 3)
@@ -60,6 +62,13 @@ for repo in "$root"/*-compose; do
         cmp -s "$copy" "$shared" || fail "$stack" "scripts/data-on-disk.ps1 differs from data-on-disk/data-on-disk.ps1"
     elif $has_dumped; then
         fail "$stack" "has a dumped volume but no scripts/data-on-disk.ps1"
+    fi
+
+    copy_sh="$repo/scripts/data-on-disk.sh"
+    if [ -e "$copy_sh" ]; then
+        cmp -s "$copy_sh" "$shared_sh" || fail "$stack" "scripts/data-on-disk.sh differs from data-on-disk/data-on-disk.sh"
+    elif [ -e "$repo/docker-compose.sh" ] && { [ -e "$copy" ] || $has_dumped; }; then
+        fail "$stack" "has a docker-compose.sh but no scripts/data-on-disk.sh"
     fi
 done
 
