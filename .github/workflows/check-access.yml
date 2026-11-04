@@ -41,6 +41,9 @@ jobs:
       - name: Check the Linux CLI has the Windows CLI's commands
         run: bash workflows/cli/check-cli.sh stacks
 
+      - name: Check the stack's shell scripts under shellcheck
+        run: bash workflows/cli/check-shell.sh stacks
+
       - name: Run the stack's CLI tests
         working-directory: stacks/${{ github.event.repository.name }}
         run: if [ -f tests/cli/run.sh ]; then bash tests/cli/run.sh; else echo "no tests/cli/run.sh"; fi
