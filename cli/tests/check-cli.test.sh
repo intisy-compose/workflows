@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2016 # the fixtures are shell and PowerShell source, so their $ stays literal
 # Fixture test for check-cli.sh: builds a small stack with both CLIs in a scratch git repository,
 # plants one mismatch at a time and asserts the verdicts. Nothing is committed: the index is what
 # a commit would record, so the mode is read from it.
@@ -18,7 +19,7 @@ expect() {
         echo "ok   $name"
     else
         echo "FAIL $name: exit $status, wanted $want_status containing '$want_text'"
-        echo "$output" | sed 's/^/     /'
+        sed 's/^/     /' <<<"$output"
         failures=$((failures + 1))
     fi
 }
@@ -77,7 +78,7 @@ stage() {
 }
 
 new_stack() {
-    rm -rf "$scratch"/*
+    rm -rf "${scratch:?}"/*
     mkdir -p "$demo/scripts" "$demo/image"
     git init -q "$demo"
     git -C "$demo" config core.autocrlf false
@@ -178,12 +179,12 @@ new_stack
 rm -rf "$demo/.git"
 expect "a stack that is not a git checkout fails" 1 "FAIL demo: is not a git checkout"
 
-rm -rf "$scratch"/*
+rm -rf "${scratch:?}"/*
 mkdir -p "$demo"
 printf 'param([string]$Command = "up")\n' >"$demo/docker-compose.ps1"
 expect "a stack without docker-compose.sh passes" 0 "no stack has a docker-compose.sh"
 
-rm -rf "$scratch"/*
+rm -rf "${scratch:?}"/*
 expect "an empty root fails" 1 "holds no *-compose repo"
 
 [ "$failures" -eq 0 ] && echo "all cases passed"

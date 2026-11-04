@@ -17,7 +17,7 @@
 #   expect-validator-runs N       how often the callback ran (default unchecked)
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=../data-on-disk.sh
+# shellcheck source=SCRIPTDIR/../data-on-disk.sh
 . "$here/../data-on-disk.sh"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
@@ -67,7 +67,7 @@ run_case() {
     case_rejections=()
     : >"$probe_log"
     : >"$validator_log"
-    local dumps=()
+    local dump_specs=()
     while IFS= read -r line || [ -n "$line" ]; do
         line=${line%$'\r'}
         if [ -z "$line" ] || [[ $line == \#* ]]; then continue; fi
@@ -77,7 +77,7 @@ run_case() {
             volume) if [ "$value" = empty ]; then volume_is_empty=true; else volume_is_empty=false; fi ;;
             folder) [ "$value" = missing ] && folder_missing=true ;;
             pattern) pattern=$value ;;
-            dump) dumps+=("$value") ;;
+            dump) dump_specs+=("$value") ;;
             validator) [ "$value" = none ] && validator="" ;;
             reject) case_rejections+=("${value%% *}"$'\t'"${value#* }") ;;
             fresh) fresh=$value ;;
@@ -92,7 +92,7 @@ run_case() {
     if [ "$folder_missing" = false ]; then
         mkdir -p "$folder"
         local dump
-        for dump in "${dumps[@]}"; do head -c "${dump#* }" /dev/zero >"$folder/${dump%% *}"; done
+        for dump in "${dump_specs[@]}"; do head -c "${dump#* }" /dev/zero >"$folder/${dump%% *}"; done
     fi
 
     decision=$(restore_decision "$volume" "$folder" "$pattern" "$validator" "$fresh")

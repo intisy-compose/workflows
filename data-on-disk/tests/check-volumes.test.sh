@@ -17,13 +17,13 @@ expect() {
         echo "ok   $name"
     else
         echo "FAIL $name: exit $status, wanted $want_status containing '$want_text'"
-        echo "$output" | sed 's/^/     /'
+        sed 's/^/     /' <<<"$output"
         failures=$((failures + 1))
     fi
 }
 
 new_stack() {
-    rm -rf "$scratch"/*
+    rm -rf "${scratch:?}"/*
     mkdir -p "$scratch/demo-compose/scripts"
 }
 

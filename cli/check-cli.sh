@@ -25,6 +25,7 @@ ps1_commands() {
         inside && /^[[:space:]]*"[^"]+"[[:space:]]*=/ { line = $0; sub(/^[[:space:]]*"/, "", line); sub(/".*/, "", line); print line }'
 }
 
+# shellcheck disable=SC2016 # a literal $ in the pattern
 has_usage_table() { tr -d '\r' <"$1" | grep -qE '^\$(usage|commands)[[:space:]]*=[[:space:]]*@\{'; }
 
 # sh_arms FILE: every alternative of every arm of the last top-level case, at the indent of its first arm.
