@@ -29,7 +29,8 @@ bash twin, for `docker-compose.sh`. A stack vendors them byte for byte as
 the network namespace and serves each UI on the tailnet name, with certificates only from the
 Tailscale socket, and on a `http://:<port>` site published on `127.0.0.1`; the tailscale sidecar
 joins Caddy's namespace. A stack copies `Caddyfile`, `gateway.yml`, `gateway.sh`,
-`namespace-address.sh` and `tailscale.sh` into its own `gateway/` folder byte for byte, extends both
+`namespace-address.sh`, `tailscale.sh`, `tailnet-node.sh` and `tailnet-node.ps1` into its own
+`gateway/` folder byte for byte, extends both
 services from its compose file, and adds only its own values:
 `gateway/sites.caddy` (its sites, each tailnet site with `import tailnet`), `gateway/serve.json`
 (the tailnet ports, each a `TCPForward` to the same port on `127.0.0.1`), container names,
@@ -48,6 +49,17 @@ to the same address. The stack lists each such service's ports under a top-level
 address; the reason sits beside the entry, and the check prints a note), and the check fails on an
 undeclared service, an address setting on loopback or every address, and a loopback upstream in
 `sites.caddy`.
+
+**A deleted stack leaves the tailnet.** `tailnet-node.sh` and `tailnet-node.ps1`, twins with the same
+messages, are what a stack's `delete` command calls after its `down`: they read the stable node ID of
+the current profile from the stack's `tailscaled.state` (never the name, which another device may
+share), remove that device through the Tailscale API (`DELETE /api/v2/device/<node ID>`) with the
+optional `TS_API_TOKEN` from the stack's config file, then remove the state folder, so a later `up`
+joins fresh. The token travels only on curl's config on stdin or in a PowerShell header, never on a
+command line. Without a token they print the node's name and ID and the admin console's Machines
+page instead; on an API error, or a state that names no node, they keep the folder so `delete` can
+run again. `gateway/tests/tailnet-node.test.sh` and `gateway/tests/tailnet-node.Tests.ps1` run them
+against a fake API.
 
 **Public access** is one switch, the same in every stack: `PUBLIC_ACCESS=true` in the stack's
 `config.env` (default `false`, and anything but `true`, `1`, `yes` or `on` counts as off) makes
@@ -90,5 +102,6 @@ when one breaks the standard or when it finds no stack at all.
 asserts that the check names it; `cli/tests/check-cli.test.sh`, `cli/tests/check-shell.test.sh`
 (it needs the pinned `shellcheck`, or `SHELLCHECK` naming a wrapper around it) and
 `data-on-disk/tests/check-volumes.test.sh` do the same for their checks, and
-`data-on-disk/tests/restore-decision.test.sh` and `data-on-disk/tests/run-pester.ps1` (Windows
-PowerShell 5.1) run the helper's two twins. CI runs all of them through `self-test.yml`.
+`data-on-disk/tests/restore-decision.test.sh` and `gateway/tests/tailnet-node.test.sh` run the
+bash twins of the two helpers, `data-on-disk/tests/run-pester.ps1` (Windows PowerShell 5.1) their
+PowerShell twins. CI runs all of them through `self-test.yml`.
