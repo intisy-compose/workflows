@@ -43,7 +43,8 @@ new_stacks() {
     write_table
     local demo="$scratch/stacks/demo-compose" arcade="$scratch/stacks/arcade-compose"
     mkdir -p "$demo/gateway" "$arcade"
-    cp "$template/Caddyfile" "$template/gateway.yml" "$template/gateway.sh" "$template/namespace-address.sh" "$template/tailscale.sh" "$demo/gateway/"
+    cp "$template/Caddyfile" "$template/gateway.yml" "$template/gateway.sh" "$template/namespace-address.sh" "$template/tailscale.sh" \
+        "$template/tailnet-node.sh" "$template/tailnet-node.ps1" "$demo/gateway/"
     cat >"$demo/docker-compose.yml" <<'EOF'
 services:
   api:
@@ -225,6 +226,14 @@ expect "drifted vendored tailscale.sh fails" 1 "gateway/tailscale.sh differs"
 new_stacks
 echo "# drifted" >>"$demo/gateway/gateway.sh"
 expect "drifted vendored gateway.sh fails" 1 "gateway/gateway.sh differs"
+
+new_stacks
+echo "# drifted" >>"$demo/gateway/tailnet-node.ps1"
+expect "drifted vendored tailnet-node.ps1 fails" 1 "gateway/tailnet-node.ps1 differs"
+
+new_stacks
+rm "$demo/gateway/tailnet-node.sh"
+expect "missing vendored tailnet-node.sh fails" 1 "gateway/tailnet-node.sh is missing"
 
 new_stacks
 sed -i 's/^http:\/\/:8401 {$/&\n\timport tailnet/' "$demo/gateway/sites.caddy"

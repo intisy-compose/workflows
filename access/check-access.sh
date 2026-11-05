@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=${1:-$(cd "$here/../.." && pwd)}
 table=${PORTS_TABLE:-$here/PORTS.md}
 template=${GATEWAY_TEMPLATE:-$here/../gateway}
-vendored_files="Caddyfile gateway.yml gateway.sh namespace-address.sh tailscale.sh"
+vendored_files="Caddyfile gateway.yml gateway.sh namespace-address.sh tailscale.sh tailnet-node.sh tailnet-node.ps1"
 funnel_capable_ports=" 443 8443 10000 "
 
 failures=0

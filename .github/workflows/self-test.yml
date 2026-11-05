@@ -1,7 +1,8 @@
 name: Self-test
 
-# This repository's own suites: each check's fixture test and the data-on-disk helper's two twins over
-# the shared cases, the bash one on Ubuntu and the PowerShell one under Windows PowerShell 5.1.
+# This repository's own suites: each check's fixture test, the data-on-disk helper's two twins over
+# the shared cases and the tailnet node helper's two twins, bash on Ubuntu and PowerShell under
+# Windows PowerShell 5.1.
 on:
   workflow_call:
 
@@ -35,6 +36,9 @@ jobs:
       - name: Restore decision, bash twin
         run: bash data-on-disk/tests/restore-decision.test.sh
 
+      - name: Tailnet node helper, bash twin
+        run: bash gateway/tests/tailnet-node.test.sh
+
       - name: shellcheck
         run: >-
           shellcheck -x
@@ -42,6 +46,7 @@ jobs:
           cli/check-shell.sh cli/tests/check-shell.test.sh cli/install-shellcheck.sh
           data-on-disk/data-on-disk.sh data-on-disk/check-volumes.sh
           data-on-disk/tests/check-volumes.test.sh data-on-disk/tests/restore-decision.test.sh
+          gateway/tailnet-node.sh gateway/tests/tailnet-node.test.sh
 
   pester:
     runs-on: windows-latest
@@ -49,6 +54,6 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Restore decision, PowerShell twin
+      - name: Restore decision and tailnet node helper, PowerShell twins
         shell: powershell
         run: .\data-on-disk\tests\run-pester.ps1
